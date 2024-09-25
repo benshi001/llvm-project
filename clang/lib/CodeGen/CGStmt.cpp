@@ -893,6 +893,13 @@ void CodeGenFunction::EmitIfStmt(const IfStmt &S) {
     incrementProfileCounter(&S);
   {
     RunCleanupsScope ThenScope(*this);
+    if (CGM.getCodeGenOpts().OptimizationLevel == 0 &&
+        CGM.getCodeGenOpts().hasReducedDebugInfo()) {
+      auto *StubFunc = llvm::Function::Create(
+          llvm::FunctionType::get(CGM.VoidTy, {}),
+          llvm::GlobalValue::InternalLinkage, "print_stub", &CGM.getModule());
+      Builder.CreateCall(StubFunc, {});
+    }
     EmitStmt(S.getThen());
   }
   EmitBranch(ContBlock);
