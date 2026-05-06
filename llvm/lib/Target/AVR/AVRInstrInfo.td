@@ -991,6 +991,12 @@ let hasSideEffects = 0, mayLoad = 1 in {
     def LDDWRdYQ : Pseudo<(outs DREGS:$dst), (ins memri:$memri),
                           "lddw\t$dst, $memri", []>,
                    Requires<[HasSRAM]>;
+    def LDDQRdYQ : Pseudo<(outs QREGS:$dst), (ins memri:$memri),
+                          "lddq\t$dst, $memri", []>,
+                   Requires<[HasSRAM]>;
+    def LDDORdYQ : Pseudo<(outs OREGS:$dst), (ins memri:$memri),
+                          "lddo\t$dst, $memri", []>,
+                   Requires<[HasSRAM]>;
   }
 }
 
@@ -1163,10 +1169,17 @@ def STDPtrQRr : FSTDLDD<1, (outs), (ins memri:$memri, GPR8:$reg),
 //   st    P+, Rr
 //   st    P+, Rr+1
 //   subiw P,  q+2
-let hasSideEffects = 0, mayStore = 1 in
-def STDWPtrQRr : Pseudo<(outs), (ins memri:$memri, DREGS:$src),
-                        "stdw\t$memri, $src", [(store i16:$src, addr:$memri)]>,
-                 Requires<[HasSRAM]>;
+let hasSideEffects = 0, mayStore = 1 in {
+  def STDWPtrQRr : Pseudo<(outs), (ins memri:$memri, DREGS:$src),
+                          "stdw\t$memri, $src", [(store i16:$src, addr:$memri)]>,
+                   Requires<[HasSRAM]>;
+  def STDQPtrQRr : Pseudo<(outs), (ins memri:$memri, QREGS:$src),
+                          "stdq\t$memri, $src", [(store i32:$src, addr:$memri)]>,
+                   Requires<[HasSRAM]>;
+  def STDOPtrQRr : Pseudo<(outs), (ins memri:$memri, OREGS:$src),
+                          "stdo\t$memri, $src", [(store i64:$src, addr:$memri)]>,
+                   Requires<[HasSRAM]>;
+}
 
 // Load program memory operations.
 let isReMaterializable = 1, mayLoad = 1, hasSideEffects = 0 in {

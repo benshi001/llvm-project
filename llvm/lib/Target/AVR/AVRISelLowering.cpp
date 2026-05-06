@@ -2630,6 +2630,10 @@ AVRTargetLowering::getRegForInlineAsmConstraint(const TargetRegisterInfo *TRI,
         return std::make_pair(0U, &AVR::GPR8RegClass);
       else if (VT == MVT::i16)
         return std::make_pair(0U, &AVR::DREGSRegClass);
+      else if (VT == MVT::i32)
+        return std::make_pair(0U, &AVR::QREGSRegClass);
+      else if (VT == MVT::i64)
+        return std::make_pair(0U, &AVR::OREGSRegClass);
       break;
     case 't': // Temporary register: r0.
       if (VT == MVT::i8)

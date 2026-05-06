@@ -25,6 +25,10 @@ class AVRReg<bits<16> num, string name, list<Register> subregs = [],
 let Namespace = "AVR" in {
   def sub_lo : SubRegIndex<8>;
   def sub_hi : SubRegIndex<8, 8>;
+  def sub_lo_16 : SubRegIndex<16>;
+  def sub_hi_16 : SubRegIndex<16, 16>;
+  def sub_lo_32 : SubRegIndex<32>;
+  def sub_hi_32 : SubRegIndex<32, 32>;
 }
 
 let Namespace = "AVR" in { def ptr : RegAltNameIndex; }
@@ -68,7 +72,7 @@ def R31 : AVRReg<31, "r31", [], ["zh"]>, DwarfRegNum<[31]>;
 def SPL : AVRReg<32, "SPL">, DwarfRegNum<[32]>;
 def SPH : AVRReg<33, "SPH">, DwarfRegNum<[33]>;
 
-// 16 bit GPR pairs.
+// 16-bit GPR pairs.
 let SubRegIndices = [sub_lo, sub_hi], CoveredBySubRegs = 1 in {
   // The value 16 for the encoding is arbitrary. SP register is not encoded
   // into instructions, they use it implicitly depending on the opcode.
@@ -108,6 +112,24 @@ let SubRegIndices = [sub_lo, sub_hi], CoveredBySubRegs = 1 in {
   def R14R13 : AVRReg<13, "r14:r13", [R13, R14]>, DwarfRegNum<[13]>;
   def R12R11 : AVRReg<11, "r12:r11", [R11, R12]>, DwarfRegNum<[11]>;
   def R10R9 : AVRReg<9, "r10:r9", [R9, R10]>, DwarfRegNum<[9]>;
+}
+
+// 32-bit GPR groups.
+let SubRegIndices = [sub_lo_16, sub_hi_16], CoveredBySubRegs = 1 in {
+  def R25R24R23R22 : AVRReg<3, "r25:r24:r23:r22", [R25R24, R23R22]>, DwarfRegNum<[22]>;
+  def R21R20R19R18 : AVRReg<2, "r21:r20:r19:r18", [R21R20, R19R18]>, DwarfRegNum<[18]>;
+  def R17R16R15R14 : AVRReg<1, "r17:r16:r15:r14", [R17R16, R15R14]>, DwarfRegNum<[14]>;
+  def R13R12R11R10 : AVRReg<0, "r13:r12:r11:r10", [R13R12, R11R10]>, DwarfRegNum<[10]>;
+}
+
+// 64-bit GPR groups.
+let SubRegIndices = [sub_lo_32, sub_hi_32], CoveredBySubRegs = 1 in {
+  def R25R24R23R22R21R20R19R18 : AVRReg<1, "r25:R24:r23:r22:r21:r20:r19:r18",
+                                        [R25R24R23R22, R21R20R19R18]>,
+                                 DwarfRegNum<[18]>;
+  def R17R16R15R14R13R12R11R10 : AVRReg<0, "r17:r16:r15:r14:r13:r12:r11:r10",
+                                        [R17R16R15R14, R13R12R11R10]>,
+                                 DwarfRegNum<[10]>;
 }
 
 //===----------------------------------------------------------------------===//
@@ -154,6 +176,16 @@ def DREGS : RegisterClass<"AVR", [i16], 8,
                            // Pseudo regs for unaligned 16-bits
                            R26R25, R24R23, R22R21, R20R19, R18R17, R16R15,
                            R14R13, R12R11, R10R9)>;
+
+// 32-bit register class.
+def QREGS : RegisterClass<"AVR", [i32], 8,
+                          (add R25R24R23R22, R21R20R19R18, R17R16R15R14,
+                           R13R12R11R10)>;
+
+// 64-bit register class.
+def OREGS : RegisterClass<"AVR", [i64], 8,
+                          (add R25R24R23R22R21R20R19R18,
+                           R17R16R15R14R13R12R11R10)>;
 
 // Lower 16-bit pair registers in R0..R15, only used in inline assembly.
 def DREGSlo

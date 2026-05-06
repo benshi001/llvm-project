@@ -50,6 +50,12 @@ public:
   /// \param Reg A 16-bit register to split.
   void splitReg(Register Reg, Register &LoReg, Register &HiReg) const;
 
+  /// Split a 32-bit `QREGS` register into a low&high pair.
+  void splitReg32(Register Reg, Register &LoReg, Register &HiReg) const;
+
+  /// Split a 64-bit `OREGS` register into a low&high pair.
+  void splitReg64(Register Reg, Register &LoReg, Register &HiReg) const;
+
   bool shouldCoalesce(MachineInstr *MI, const TargetRegisterClass *SrcRC,
                       unsigned SubReg, const TargetRegisterClass *DstRC,
                       unsigned DstSubReg, const TargetRegisterClass *NewRC,

@@ -73,6 +73,10 @@ BitVector AVRRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
     // Reserve 16-bit registers R3R2~R18R17.
     for (unsigned Reg = AVR::R3R2; Reg <= AVR::R18R17; Reg++)
       Reserved.set(Reg);
+    // Reserve 32-bit and 64-bit registers.
+    Reserved.set(AVR::R17R16R15R14);
+    Reserved.set(AVR::R13R12R11R10);
+    Reserved.set(AVR::R17R16R15R14R13R12R11R10);
   }
 
   // We tenatively reserve the frame pointer register r29:r28 because the
@@ -95,15 +99,16 @@ const TargetRegisterClass *
 AVRRegisterInfo::getLargestLegalSuperClass(const TargetRegisterClass *RC,
                                            const MachineFunction &MF) const {
   const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
-  if (TRI->isTypeLegalForClass(*RC, MVT::i16)) {
+  if (TRI->isTypeLegalForClass(*RC, MVT::i64))
+    return &AVR::OREGSRegClass;
+  else if (TRI->isTypeLegalForClass(*RC, MVT::i32))
+    return &AVR::QREGSRegClass;
+  else if (TRI->isTypeLegalForClass(*RC, MVT::i16))
     return &AVR::DREGSRegClass;
-  }
-
-  if (TRI->isTypeLegalForClass(*RC, MVT::i8)) {
+  else if (TRI->isTypeLegalForClass(*RC, MVT::i8))
     return &AVR::GPR8RegClass;
-  }
-
-  llvm_unreachable("Invalid register size");
+  else
+    llvm_unreachable("Invalid register size");
 }
 
 /// Fold a frame offset shared between two add instructions into a single one.
@@ -299,9 +304,22 @@ AVRRegisterInfo::getPointerRegClass(unsigned Kind) const {
 void AVRRegisterInfo::splitReg(Register Reg, Register &LoReg,
                                Register &HiReg) const {
   assert(AVR::DREGSRegClass.contains(Reg) && "can only split 16-bit registers");
-
   LoReg = getSubReg(Reg, AVR::sub_lo);
   HiReg = getSubReg(Reg, AVR::sub_hi);
+}
+
+void AVRRegisterInfo::splitReg32(Register Reg, Register &LoReg,
+                                 Register &HiReg) const {
+  assert(AVR::QREGSRegClass.contains(Reg) && "can only split 32-bit registers");
+  LoReg = getSubReg(Reg, AVR::sub_lo_16);
+  HiReg = getSubReg(Reg, AVR::sub_hi_16);
+}
+
+void AVRRegisterInfo::splitReg64(Register Reg, Register &LoReg,
+                                 Register &HiReg) const {
+  assert(AVR::OREGSRegClass.contains(Reg) && "can only split 64-bit registers");
+  LoReg = getSubReg(Reg, AVR::sub_lo_32);
+  HiReg = getSubReg(Reg, AVR::sub_hi_32);
 }
 
 bool AVRRegisterInfo::shouldCoalesce(
