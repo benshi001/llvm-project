@@ -14,7 +14,6 @@
 #include "AVRISelLowering.h"
 
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/StringSwitch.h"
 #include "llvm/CodeGen/CallingConvLower.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -2771,27 +2770,40 @@ void AVRTargetLowering::LowerAsmOperandForConstraint(SDValue Op,
   return TargetLowering::LowerAsmOperandForConstraint(Op, Constraint, Ops, DAG);
 }
 
+#define GET_REGISTER_MATCHER
+#include "AVRGenAsmMatcher.inc"
+
 Register AVRTargetLowering::getRegisterByName(const char *RegName, LLT VT,
                                               const MachineFunction &MF) const {
-  Register Reg;
+  // Reject illegal types.
+  if (!VT.isScalar(8) && !VT.isScalar(16))
+    return 0;
 
-  if (VT == LLT::scalar(8)) {
-    Reg = StringSwitch<unsigned>(RegName)
-              .Case("r0", AVR::R0)
-              .Case("r1", AVR::R1)
-              .Default(0);
-  } else {
-    Reg = StringSwitch<unsigned>(RegName)
-              .Case("r0", AVR::R1R0)
-              .Case("sp", AVR::SP)
-              .Default(0);
+  Register Reg = MatchRegisterName(RegName);
+  // Reject stack pointers and SREG.
+  if (Reg == AVR::SPL || Reg == AVR::SPH || Reg == AVR::SP || Reg == AVR::SREG)
+    return 0;
+  // Reject invalid registers on AVRTiny devices.
+  if (MF.getSubtarget<AVRSubtarget>().hasTinyEncoding() && Reg < AVR::R16)
+    return 0;
+
+  DenseMap<Register, Register> RegMap = {
+      {AVR::R0, AVR::R1R0},    {AVR::R2, AVR::R3R2},    {AVR::R4, AVR::R5R4},
+      {AVR::R6, AVR::R7R6},    {AVR::R8, AVR::R9R8},    {AVR::R10, AVR::R11R10},
+      {AVR::R12, AVR::R13R12}, {AVR::R14, AVR::R15R14}, {AVR::R16, AVR::R17R16},
+      {AVR::R18, AVR::R19R18}, {AVR::R20, AVR::R21R20}, {AVR::R22, AVR::R23R22},
+      {AVR::R24, AVR::R25R24}, {AVR::R26, AVR::R27R26}, {AVR::R28, AVR::R29R28},
+      {AVR::R30, AVR::R31R30}};
+
+  if (Reg && VT.isScalar(16)) {
+    // Return if the result is already legal.
+    for (auto Rx : RegMap.values())
+      if (Rx == Reg)
+        return Reg;
+    // Get a proper 16-bit register via its lower part.
+    return RegMap.contains(Reg) ? RegMap[Reg] : (Register)0;
   }
 
-  if (Reg)
-    return Reg;
-
-  report_fatal_error(
-      Twine("Invalid register name \"" + StringRef(RegName) + "\"."));
+  return Reg;
 }
-
 } // end of namespace llvm
