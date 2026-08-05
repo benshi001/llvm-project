@@ -15,6 +15,7 @@
 
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/MC/MCRegister.h"
 #include "llvm/Target/TargetMachine.h"
 
 #include "AVRFrameLowering.h"
@@ -93,6 +94,18 @@ public:
   }
   Register getZeroRegister() const {
     return hasTinyEncoding() ? AVR::R17 : AVR::R1;
+  }
+
+  MCPhysReg getSPRegister() const {
+    return hasTinyEncoding() ? AVR::R19R18 : AVR::R3R2;
+  }
+
+  MCPhysReg getSPRegisterLow() const {
+    return hasTinyEncoding() ? AVR::R18 : AVR::R2;
+  }
+
+  MCPhysReg getSPRegisterHigh() const {
+    return hasTinyEncoding() ? AVR::R19 : AVR::R3;
   }
 
 private:

@@ -53,7 +53,8 @@ void AVRFrameLowering::emitPrologue(MachineFunction &MF,
   const AVRInstrInfo &TII = *STI.getInstrInfo();
   const AVRMachineFunctionInfo *AFI = MF.getInfo<AVRMachineFunctionInfo>();
   const MachineRegisterInfo &MRI = MF.getRegInfo();
-  bool HasFP = hasFP(MF);
+  const bool HasFP = hasFP(MF);
+  const MCPhysReg SPReg = STI.getSPRegister();
 
   // Interrupt handlers re-enable interrupts in function entry.
   if (AFI->isInterruptHandler()) {
@@ -116,7 +117,8 @@ void AVRFrameLowering::emitPrologue(MachineFunction &MF,
   // Mark the FramePtr as live-in in every block except the entry.
   for (MachineBasicBlock &MBBJ : llvm::drop_begin(MF)) {
     MBBJ.addLiveIn(AVR::FPReg);
-    MBBJ.addLiveIn(AVR::SPReg); // TODO should be conditional
+    if (HasFP && STI.getRegisterInfo()->hasStackRealignment(MF))
+      MBBJ.addLiveIn(SPReg);
   }
 
   if (!FrameSize) {
@@ -143,15 +145,14 @@ void AVRFrameLowering::emitPrologue(MachineFunction &MF,
   if (STI.getRegisterInfo()->hasStackRealignment(MF)) {
     uint64_t Align = (int)MFI.getMaxAlign().value();
 
-    TII.copyPhysReg(MBB, MBBI, DL, AVR::SPReg, AVR::FPReg, false, false, false);
-
-    BuildMI(MBB, MBBI, DL, TII.get(AVR::SUBIWRdK), AVR::SPReg)
-        .addReg(AVR::SPReg)
+    TII.copyPhysReg(MBB, MBBI, DL, SPReg, AVR::FPReg, false, false, false);
+    BuildMI(MBB, MBBI, DL, TII.get(AVR::SUBIWRdK), SPReg)
+        .addReg(SPReg)
         .addImm(-Align)
         .setMIFlag(MachineInstr::FrameSetup);
 
-    BuildMI(MBB, MBBI, DL, TII.get(AVR::ANDIWRdK), AVR::SPReg)
-        .addReg(AVR::SPReg)
+    BuildMI(MBB, MBBI, DL, TII.get(AVR::ANDIWRdK), SPReg)
+        .addReg(SPReg)
         .addImm(-Align)
         .setMIFlag(MachineInstr::FrameSetup);
   }
@@ -258,13 +259,15 @@ StackOffset AVRFrameLowering::getFrameIndexReference(const MachineFunction &MF,
                                                      Register &FrameReg) const {
   const MachineFrameInfo &MFI = MF.getFrameInfo();
   const TargetRegisterInfo *RI = MF.getSubtarget().getRegisterInfo();
+  const AVRSubtarget &STI = MF.getSubtarget<AVRSubtarget>();
+  MCPhysReg SPReg = STI.getSPRegister();
 
   assert(MFI.getStackID(FI) == TargetStackID::Default && "Unsupported stack");
 
   int Offset;
 
   if (RI->hasStackRealignment(MF) && !MFI.isFixedObjectIndex(FI)) {
-    FrameReg = AVR::SPReg;
+    FrameReg = SPReg;
 
     Offset = MFI.getObjectOffset(FI) + MFI.getOffsetAdjustment() +
              MFI.getStackSize() - getOffsetOfLocalArea();
@@ -485,14 +488,17 @@ void AVRFrameLowering::determineCalleeSaves(MachineFunction &MF,
                                             BitVector &SavedRegs,
                                             RegScavenger *RS) const {
   TargetFrameLowering::determineCalleeSaves(MF, SavedRegs, RS);
+  const AVRSubtarget &STI = MF.getSubtarget<AVRSubtarget>();
+  const MCPhysReg SPRegHi = STI.getSPRegisterHigh();
+  const MCPhysReg SPRegLo = STI.getSPRegisterLow();
 
   if (hasFP(MF)) {
     SavedRegs.set(AVR::FPRegHi);
     SavedRegs.set(AVR::FPRegLo);
 
     if (MF.getSubtarget().getRegisterInfo()->hasStackRealignment(MF)) {
-      SavedRegs.set(AVR::SPRegHi);
-      SavedRegs.set(AVR::SPRegLo);
+      SavedRegs.set(SPRegHi);
+      SavedRegs.set(SPRegLo);
     }
   }
 }

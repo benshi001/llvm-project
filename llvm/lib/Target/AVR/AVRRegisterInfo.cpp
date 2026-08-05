@@ -92,9 +92,9 @@ BitVector AVRRegisterInfo::getReservedRegs(const MachineFunction &MF) const {
   Reserved.set(AVR::FPRegHi);
 
   if (Subtarget.getFrameLowering()->hasFP(MF) && hasStackRealignment(MF)) {
-    Reserved.set(AVR::SPReg);
-    Reserved.set(AVR::SPRegLo);
-    Reserved.set(AVR::SPRegHi);
+    Reserved.set(Subtarget.getSPRegister());
+    Reserved.set(Subtarget.getSPRegisterLow());
+    Reserved.set(Subtarget.getSPRegisterHigh());
   }
 
   return Reserved;

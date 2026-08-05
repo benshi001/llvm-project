@@ -57,11 +57,6 @@ static constexpr MCPhysReg FPReg = AVR::R29R28;
 static constexpr MCPhysReg FPRegLo = AVR::R28;
 static constexpr MCPhysReg FPRegHi = AVR::R29;
 
-/// Register used to hold stack pointer.
-static constexpr MCPhysReg SPReg = AVR::R17R16; // TODO should probably be R19R18 on Tiny
-static constexpr MCPhysReg SPRegLo = AVR::R16;
-static constexpr MCPhysReg SPRegHi = AVR::R17;
-
 /// Checks if a given type is a pointer to program memory.
 template <typename T> bool isProgramMemoryAddress(T *V) {
   auto *PT = cast<PointerType>(V->getType());
