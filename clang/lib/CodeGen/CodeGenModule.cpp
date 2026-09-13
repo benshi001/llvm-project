@@ -1311,13 +1311,14 @@ void CodeGenModule::Release() {
   // is one semantic TU, so this per-TU marker is useless in host and device IR.
   // On the host it also collides, as every module shares one CUID and emits the
   // same symbol at JIT link.
-  if (LangOpts.HIP && !LangOpts.IncrementalExtensions) {
+  if ((LangOpts.HIP || LangOpts.SHC) && !LangOpts.IncrementalExtensions) {
     // Emit a unique ID so that host and device binaries from the same
     // compilation unit can be associated.
     auto *GV = new llvm::GlobalVariable(
         getModule(), Int8Ty, false, llvm::GlobalValue::ExternalLinkage,
         llvm::Constant::getNullValue(Int8Ty),
-        "__hip_cuid_" + getContext().getCUIDHash());
+        (LangOpts.SHC ? "__shc_cuid_" : "__hip_cuid_") +
+            getContext().getCUIDHash());
     getSanitizerMetadata()->disableSanitizerForGlobal(GV);
     addCompilerUsedGlobal(GV);
   }

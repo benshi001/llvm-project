@@ -39,6 +39,7 @@ using namespace CodeGen;
 namespace {
 constexpr unsigned CudaFatMagic = 0x466243b1;
 constexpr unsigned HIPFatMagic = 0x48495046; // "HIPF"
+constexpr unsigned SHCFatMagic = 0x53484346; // "SHCF"
 
 class CGNVCUDARuntime : public CGCUDARuntime {
 
@@ -258,6 +259,8 @@ CGNVCUDARuntime::CGNVCUDARuntime(CodeGenModule &CGM)
     Prefix = "llvm";
   else if (CGM.getLangOpts().HIP)
     Prefix = "hip";
+  else if (CGM.getLangOpts().SHC)
+    Prefix = "shc";
   else
     Prefix = "cuda";
 }
@@ -339,7 +342,7 @@ void CGNVCUDARuntime::emitDeviceStub(CodeGenFunction &CGF,
   if (CudaFeatureEnabled(CGM.getTarget().getSDKVersion(),
                          CudaFeature::CUDA_USES_NEW_LAUNCH) ||
       (CGF.getLangOpts().HIP && CGF.getLangOpts().HIPUseNewLaunchAPI) ||
-      (CGF.getLangOpts().OffloadViaLLVM))
+      (CGF.getLangOpts().SHC) || (CGF.getLangOpts().OffloadViaLLVM))
     emitDeviceStubBodyNew(CGF, Args);
   else
     emitDeviceStubBodyLegacy(CGF, Args);
@@ -448,6 +451,10 @@ void CGNVCUDARuntime::emitDeviceStubBodyNew(CodeGenFunction &CGF,
       KernelLaunchAPI = KernelLaunchAPI + "_ptsz";
   }
   auto LaunchKernelName = addPrefixToName(KernelLaunchAPI);
+  // SHC uses the flat C name declared by __clang_shc_runtime_wrapper.h rather
+  // than the <prefix>LaunchKernel convention.
+  if (CGF.getLangOpts().SHC)
+    LaunchKernelName = "shc_launch_kernel";
   const IdentifierInfo &cudaLaunchKernelII =
       CGM.getContext().Idents.get(LaunchKernelName);
   FunctionDecl *cudaLaunchKernelFD = nullptr;
@@ -680,7 +687,7 @@ llvm::Function *CGNVCUDARuntime::makeRegisterGlobalsFn() {
 
   llvm::Type *VarSizeTy = IntTy;
   // For HIP or CUDA 9.0+, device variable size is type of `size_t`.
-  if (CGM.getLangOpts().HIP ||
+  if (CGM.getLangOpts().HIP || CGM.getLangOpts().SHC ||
       ToCudaVersion(CGM.getTarget().getSDKVersion()) >= CudaVersion::CUDA_90)
     VarSizeTy = SizeTy;
 
@@ -842,14 +849,19 @@ llvm::Function *CGNVCUDARuntime::makeRegisterGlobalsFn() {
 /// \endcode
 llvm::Function *CGNVCUDARuntime::makeModuleCtorFunction() {
   bool IsHIP = CGM.getLangOpts().HIP;
+  bool IsSHC = CGM.getLangOpts().SHC;
   bool IsCUDA = CGM.getLangOpts().CUDA;
+  // SHC follows the HIP fatbin scheme: when no fatbin is available yet an
+  // external __shc_fatbin symbol is left in the object file and filled in at
+  // link time.
+  bool IsHIPOrSHC = IsHIP || IsSHC;
   // No need to generate ctors/dtors if there is no GPU binary.
   StringRef CudaGpuBinaryFileName =
       CGM.getCodeGenOpts().OffloadBinaryToEmbedFile;
-  if (CudaGpuBinaryFileName.empty() && !IsHIP)
+  if (CudaGpuBinaryFileName.empty() && !IsHIPOrSHC)
     return nullptr;
-  if ((IsHIP || (IsCUDA && !RelocatableDeviceCode)) && EmittedKernels.empty() &&
-      DeviceVars.empty())
+  if ((IsHIPOrSHC || (IsCUDA && !RelocatableDeviceCode)) &&
+      EmittedKernels.empty() && DeviceVars.empty())
     return nullptr;
 
   // void __{cuda|hip}_register_globals(void* handle);
@@ -894,22 +906,30 @@ llvm::Function *CGNVCUDARuntime::makeModuleCtorFunction() {
 
   CtorBuilder.SetInsertPoint(CtorEntryBB);
 
-  const char *FatbinConstantName;
-  const char *FatbinSectionName;
-  const char *ModuleIDSectionName;
-  StringRef ModuleIDPrefix;
+  // SHC mirrors the HIP fatbin layout, using its own section and symbol
+  // names derived from the "shc" prefix.
+  StringRef FatbinPrefix = IsSHC ? "shc" : "hip";
+  StringRef FatbinUpperPrefix = IsSHC ? "SHC" : "HIP";
+  std::string FatbinConstantName;
+  std::string FatbinSectionName;
+  std::string ModuleIDSectionName;
+  std::string ModuleIDPrefix;
   llvm::Constant *FatBinStr;
   unsigned FatMagic;
-  if (IsHIP) {
+  if (IsHIPOrSHC) {
     // On macOS (Mach-O), section names must be in "segment,section" format.
-    FatbinConstantName =
-        CGM.getTriple().isMacOSX() ? "__HIP,__hip_fatbin" : ".hip_fatbin";
-    FatbinSectionName =
-        CGM.getTriple().isMacOSX() ? "__HIP,__fatbin" : ".hipFatBinSegment";
-
-    ModuleIDSectionName =
-        CGM.getTriple().isMacOSX() ? "__HIP,__module_id" : "__hip_module_id";
-    ModuleIDPrefix = "__hip_";
+    if (CGM.getTriple().isMacOSX()) {
+      FatbinConstantName =
+          ("__" + FatbinUpperPrefix + ",__" + FatbinPrefix + "_fatbin").str();
+      FatbinSectionName = ("__" + FatbinUpperPrefix + ",__fatbin").str();
+      ModuleIDSectionName =
+          ("__" + FatbinUpperPrefix + ",__module_id").str();
+    } else {
+      FatbinConstantName = ("." + FatbinPrefix + "_fatbin").str();
+      FatbinSectionName = ("." + FatbinPrefix + "FatBinSegment").str();
+      ModuleIDSectionName = ("__" + FatbinPrefix + "_module_id").str();
+    }
+    ModuleIDPrefix = ("__" + FatbinPrefix + "_").str();
 
     if (CudaGpuBinary) {
       // If fatbin is available from early finalization, create a string
@@ -919,20 +939,20 @@ llvm::Function *CGNVCUDARuntime::makeModuleCtorFunction() {
                                     FatbinConstantName, HIPCodeObjectAlign);
     } else {
       // If fatbin is not available, create an external symbol
-      // __hip_fatbin in section .hip_fatbin. The external symbol is supposed
-      // to contain the fat binary but will be populated somewhere else,
-      // e.g. by lld through link script.
+      // __hip_fatbin/__shc_fatbin in the fatbin section. The external symbol
+      // is supposed to contain the fat binary but will be populated
+      // somewhere else, e.g. by lld through link script.
+      std::string FatbinSymbol = ("__" + FatbinPrefix + "_fatbin").str();
+      if (!CGM.getLangOpts().CUID.empty())
+        FatbinSymbol += ("_" + CGM.getContext().getCUIDHash()).str();
       FatBinStr = new llvm::GlobalVariable(
           CGM.getModule(), CGM.Int8Ty,
           /*isConstant=*/true, llvm::GlobalValue::ExternalLinkage, nullptr,
-          "__hip_fatbin" + (CGM.getLangOpts().CUID.empty()
-                                ? ""
-                                : "_" + CGM.getContext().getCUIDHash()),
-          nullptr, llvm::GlobalVariable::NotThreadLocal);
+          FatbinSymbol, nullptr, llvm::GlobalVariable::NotThreadLocal);
       cast<llvm::GlobalVariable>(FatBinStr)->setSection(FatbinConstantName);
     }
 
-    FatMagic = HIPFatMagic;
+    FatMagic = IsSHC ? SHCFatMagic : HIPFatMagic;
   } else {
     if (RelocatableDeviceCode)
       FatbinConstantName = CGM.getTriple().isMacOSX()
@@ -981,7 +1001,7 @@ llvm::Function *CGNVCUDARuntime::makeModuleCtorFunction() {
   // constructor functions concurrently since doing that would not guarantee
   // thread safety of the loaded program. Therefore we can assume sequential
   // execution of constructor functions here.
-  if (IsHIP) {
+  if (IsHIPOrSHC) {
     auto Linkage = RelocatableDeviceCode ? llvm::GlobalValue::ExternalLinkage
                                          : llvm::GlobalValue::InternalLinkage;
     llvm::BasicBlock *IfBlock =
@@ -989,15 +1009,17 @@ llvm::Function *CGNVCUDARuntime::makeModuleCtorFunction() {
     llvm::BasicBlock *ExitBlock =
         llvm::BasicBlock::Create(Context, "exit", ModuleCtorFunc);
     // The name, size, and initialization pattern of this variable is part
-    // of HIP ABI.
+    // of HIP ABI, and SHC follows the same scheme.
+    std::string GpuBinaryHandleName =
+        ("__" + FatbinPrefix + "_gpubin_handle").str();
+    if (!CGM.getLangOpts().CUID.empty())
+      GpuBinaryHandleName += ("_" + CGM.getContext().getCUIDHash()).str();
     GpuBinaryHandle = new llvm::GlobalVariable(
         TheModule, PtrTy, /*isConstant=*/false, Linkage,
         /*Initializer=*/
         !RelocatableDeviceCode ? llvm::ConstantPointerNull::get(PtrTy)
                                : nullptr,
-        "__hip_gpubin_handle" + (CGM.getLangOpts().CUID.empty()
-                                     ? ""
-                                     : "_" + CGM.getContext().getCUIDHash()));
+        GpuBinaryHandleName);
     GpuBinaryHandle->setAlignment(CGM.getPointerAlign().getAsAlign());
     // Prevent the weak symbol in different shared libraries being merged.
     if (Linkage != llvm::GlobalValue::InternalLinkage)
@@ -1149,10 +1171,10 @@ llvm::Function *CGNVCUDARuntime::makeModuleDtorFunction() {
       GpuBinaryHandle, GpuBinaryHandle->getValueType(),
       CharUnits::fromQuantity(GpuBinaryHandle->getAlign().valueOrOne()));
   auto *HandleValue = DtorBuilder.CreateLoad(GpuBinaryAddr);
-  // There is only one HIP fat binary per linked module, however there are
+  // There is only one HIP/SHC fat binary per linked module, however there are
   // multiple destructor functions. Make sure the fat binary is unregistered
   // only once.
-  if (CGM.getLangOpts().HIP) {
+  if (CGM.getLangOpts().HIP || CGM.getLangOpts().SHC) {
     llvm::BasicBlock *IfBlock =
         llvm::BasicBlock::Create(Context, "if", ModuleDtorFunc);
     llvm::BasicBlock *ExitBlock =
@@ -1293,6 +1315,9 @@ void CGNVCUDARuntime::transformManagedVars() {
 // registered. The linker will provide a pointer to this section so we can
 // register the symbols with the linked device image.
 void CGNVCUDARuntime::createOffloadingEntries() {
+  // TODO(SHC): SHC needs its own OffloadKind::OFK_SHC. Until the SHC offload
+  // kind is added (offload action + clang-offload-bundler support), SHC RDC
+  // compilations must not claim to be CUDA.
   llvm::object::OffloadKind Kind = CGM.getLangOpts().HIP
                                        ? llvm::object::OffloadKind::OFK_HIP
                                        : llvm::object::OffloadKind::OFK_Cuda;
