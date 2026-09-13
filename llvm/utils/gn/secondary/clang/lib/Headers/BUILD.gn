@@ -137,6 +137,7 @@ copy("Headers") {
     "__clang_hip_math.h",
     "__clang_hip_runtime_wrapper.h",
     "__clang_hip_stdlib.h",
+    "__clang_shc_runtime_wrapper.h",
     "__clang_spirv_builtins.h",
     "__clang_spirv_libdevice_declares.h",
     "__clang_spirv_math.h",

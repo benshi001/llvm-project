@@ -1,0 +1,30 @@
+// Test that SHC sources force-include the SHC runtime wrapper header.
+
+// RUN: %clang -### -x shc --target=x86_64-unknown-linux-gnu -c %s 2>&1 \
+// RUN:   | FileCheck %s
+
+// CHECK: "-cc1"
+// CHECK-SAME: "-include" "__clang_shc_runtime_wrapper.h"
+// CHECK-SAME: "-x" "shc"
+
+// The .shc extension alone must also pull in the wrapper.
+//
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu -c %s 2>&1 \
+// RUN:   | FileCheck %s
+
+// -nobuiltininc drops the resource directory from the include search path,
+// so the wrapper must not be force-included: it would fail to be found.
+//
+// RUN: %clang -### -x shc --target=x86_64-unknown-linux-gnu -nobuiltininc \
+// RUN:   -c %s 2>&1 | FileCheck -check-prefix=NOBUILTIN %s
+
+// NOBUILTIN: "-cc1"
+// NOBUILTIN-NOT: "-include" "__clang_shc_runtime_wrapper.h"
+
+// Non-SHC inputs must be unaffected.
+//
+// RUN: %clang -### -x c++ --target=x86_64-unknown-linux-gnu -c %s 2>&1 \
+// RUN:   | FileCheck -check-prefix=NOCXX %s
+
+// NOCXX: "-cc1"
+// NOCXX-NOT: "-include" "__clang_shc_runtime_wrapper.h"

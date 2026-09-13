@@ -1,0 +1,16 @@
+// Test the predefined macros for the SHC language.
+
+// RUN: %clang -x shc --target=x86_64-unknown-linux-gnu -dM -E -o - %s \
+// RUN:   | FileCheck %s
+
+// SHC sets LangOpts.CUDA, but it is neither CUDA nor HIP. These are emitted
+// before __SHC__ in -dM output, so they have to be checked first.
+// CHECK-NOT: #define __CUDA__ 1
+// CHECK-NOT: #define __HIP__ 1
+
+// -dM sorts the output, so __SHCC__ comes before __SHC__.
+// CHECK: #define __SHCC__ 1
+// CHECK: #define __SHC__ 1
+
+// The host compilation does not set the device macro.
+// CHECK-NOT: __SHC_DEVICE_COMPILE__
