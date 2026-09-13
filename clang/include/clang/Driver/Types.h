@@ -89,6 +89,9 @@ namespace types {
   /// isHIP - Is this a HIP input.
   bool isHIP(ID Id);
 
+  /// isSHC - Is this a SHC input.
+  bool isSHC(ID Id);
+
   /// isObjC - Is this an "ObjC" input (Obj-C and Obj-C++ sources and headers).
   bool isObjC(ID Id);
 

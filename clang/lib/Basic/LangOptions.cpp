@@ -215,8 +215,9 @@ void LangOptions::setLangDefaults(LangOptions &Opts, Language Lang,
   }
 
   Opts.HIP = Lang == Language::HIP;
-  Opts.CUDA = Lang == Language::CUDA || Opts.HIP;
-  if (Opts.HIP) {
+  Opts.SHC = Lang == Language::SHC;
+  Opts.CUDA = Lang == Language::CUDA || Opts.HIP || Opts.SHC;
+  if (Opts.HIP || Opts.SHC) {
     Opts.setDefaultFPContractMode(LangOptions::FPM_FastHonorPragmas);
   } else if (Opts.CUDA) {
     if (T.isSPIRV()) {

@@ -7,7 +7,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Basic/LangOptions.h"
+#include "clang/Basic/LangStandard.h"
+#include "llvm/TargetParser/Triple.h"
 #include "gtest/gtest.h"
+
+#include <string>
+#include <vector>
 
 using namespace llvm;
 using namespace clang;
@@ -54,5 +59,20 @@ TEST(LangOptsTest, CppStdLang) {
   EXPECT_EQ(opts.getCPlusPlusLangStd(), 202700);
 
   EXPECT_FALSE(opts.getCLangStd());
+}
+
+TEST(LangOptsTest, SHCImpliesCUDA) {
+  LangOptions opts;
+  std::vector<std::string> Includes;
+  LangOptions::setLangDefaults(opts, Language::SHC,
+                              llvm::Triple("x86_64-unknown-linux-gnu"),
+                              Includes);
+  EXPECT_TRUE(opts.SHC);
+  EXPECT_TRUE(opts.CUDA);
+  EXPECT_FALSE(opts.HIP);
+
+  // SHC is a C++ based language and shares the C++ language standards.
+  EXPECT_TRUE(opts.CPlusPlus);
+  EXPECT_EQ(opts.getCPlusPlusLangStd(), 201703);
 }
 } // namespace

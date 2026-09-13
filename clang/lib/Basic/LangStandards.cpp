@@ -39,6 +39,8 @@ StringRef clang::languageToString(Language L) {
     return "CUDA";
   case Language::HIP:
     return "HIP";
+  case Language::SHC:
+    return "SHC";
   case Language::HLSL:
     return "HLSL";
   }
@@ -114,6 +116,7 @@ LangStandard::Kind clang::getDefaultLanguageStandard(clang::Language Lang,
   case Language::ObjCXX:
   case Language::CUDA:
   case Language::HIP:
+  case Language::SHC:
     return LangStandard::lang_gnucxx17;
   case Language::HLSL:
     return LangStandard::lang_hlsl202x;

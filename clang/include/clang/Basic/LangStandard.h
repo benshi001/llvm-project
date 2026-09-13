@@ -40,6 +40,7 @@ enum class Language : uint8_t {
   OpenCLCXX,
   CUDA,
   HIP,
+  SHC,
   HLSL,
   ///@}
 };

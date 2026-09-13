@@ -104,6 +104,7 @@ bool types::canTypeBeUserSpecified(ID Id) {
   static const clang::driver::types::ID kStaticLangageTypes[] = {
       TY_CUDA_DEVICE,
       TY_HIP_DEVICE,
+      TY_SHC_DEVICE,
       TY_PP_CHeader,
       TY_PP_ObjCHeader,
       TY_PP_CXXHeader,
@@ -124,13 +125,14 @@ bool types::canTypeBeUserSpecified(ID Id) {
       TY_Dependencies,
       TY_CUDA_FATBIN,
       TY_HIP_FATBIN,
+      TY_SHC_FATBIN,
       TY_SYCL_FATBIN};
   return !llvm::is_contained(kStaticLangageTypes, Id);
 }
 
 bool types::appendSuffixForType(ID Id) {
   return Id == TY_PCH || Id == TY_dSYM || Id == TY_CUDA_FATBIN ||
-         Id == TY_HIP_FATBIN || Id == TY_SYCL_FATBIN;
+         Id == TY_HIP_FATBIN || Id == TY_SHC_FATBIN || Id == TY_SYCL_FATBIN;
 }
 
 bool types::canLipoType(ID Id) {
@@ -153,6 +155,9 @@ bool types::isAcceptedByClang(ID Id) {
   case TY_HIP:
   case TY_PP_HIP:
   case TY_HIP_DEVICE:
+  case TY_SHC:
+  case TY_PP_SHC:
+  case TY_SHC_DEVICE:
   case TY_ObjC: case TY_PP_ObjC: case TY_PP_ObjC_Alias:
   case TY_CXX: case TY_PP_CXX:
   case TY_ObjCXX: case TY_PP_ObjCXX: case TY_PP_ObjCXX_Alias:
@@ -210,6 +215,9 @@ bool types::isDerivedFromC(ID Id) {
   case TY_PP_HIP:
   case TY_HIP:
   case TY_HIP_DEVICE:
+  case TY_PP_SHC:
+  case TY_SHC:
+  case TY_SHC_DEVICE:
   case TY_PP_ObjC:
   case TY_PP_ObjC_Alias:
   case TY_ObjC:
@@ -283,6 +291,9 @@ bool types::isCXX(ID Id) {
   case TY_HIP:
   case TY_PP_HIP:
   case TY_HIP_DEVICE:
+  case TY_SHC:
+  case TY_PP_SHC:
+  case TY_SHC_DEVICE:
     return true;
   }
 }
@@ -320,6 +331,18 @@ bool types::isHIP(ID Id) {
   case TY_HIP:
   case TY_PP_HIP:
   case TY_HIP_DEVICE:
+    return true;
+  }
+}
+
+bool types::isSHC(ID Id) {
+  switch (Id) {
+  default:
+    return false;
+
+  case TY_SHC:
+  case TY_PP_SHC:
+  case TY_SHC_DEVICE:
     return true;
   }
 }
@@ -385,6 +408,8 @@ types::ID types::lookupTypeForExtension(llvm::StringRef Ext) {
       .Case("gch", TY_PCH)
       .Case("hip", TY_HIP)
       .Case("hipi", TY_PP_HIP)
+      .Case("shc", TY_SHC)
+      .Case("shci", TY_PP_SHC)
       .Case("hpp", TY_CXXHeader)
       .Case("hxx", TY_CXXHeader)
       .Case("iim", TY_PP_CXXModule)
