@@ -515,6 +515,68 @@ fatbinary(ArrayRef<std::tuple<StringRef, StringRef, StringRef>> InputFiles,
 }
 } // namespace amdgcn
 
+namespace shc {
+
+/// Bundles the SHC device images into a fat binary using clang-offload-bundler.
+/// Unlike HIP there is no legacy target-id spelling to preserve, so a bundle
+/// entry is simply "shc-" followed by the device triple.
+Expected<StringRef>
+fatbinary(ArrayRef<std::pair<StringRef, StringRef>> InputFiles,
+          const ArgList &Args) {
+  llvm::TimeTraceScope TimeScope("SHC Fatbinary");
+
+  // SHC uses the clang-offload-bundler to bundle the linked images.
+  Expected<std::string> OffloadBundlerPath = findProgram(
+      "clang-offload-bundler", {getExecutableDir("clang-offload-bundler")});
+  if (!OffloadBundlerPath)
+    return OffloadBundlerPath.takeError();
+
+  // Create a new file to write the bundled fat binary to.
+  auto TempFileOrErr = createOutputFile(ExecutableName, "shcfb");
+  if (!TempFileOrErr)
+    return TempFileOrErr.takeError();
+
+  BumpPtrAllocator Alloc;
+  StringSaver Saver(Alloc);
+
+  SmallVector<StringRef, 16> CmdArgs;
+  CmdArgs.push_back(*OffloadBundlerPath);
+  CmdArgs.push_back("-type=o");
+  CmdArgs.push_back("-bundle-align=4096");
+
+  if (Args.hasArg(OPT_compress))
+    CmdArgs.push_back("-compress");
+  if (auto *Arg = Args.getLastArg(OPT_compression_level_eq))
+    CmdArgs.push_back(
+        Args.MakeArgString(Twine("-compression-level=") + Arg->getValue()));
+
+  llvm::Triple HostTriple(
+      Args.getLastArgValue(OPT_host_triple_EQ, sys::getDefaultTargetTriple()));
+  SmallVector<StringRef> Targets = {
+      Saver.save("-targets=host-" + HostTriple.normalize())};
+  for (const auto &[File, TripleRef] : InputFiles)
+    Targets.push_back(Saver.save(
+        "shc-" +
+        Triple(TripleRef).normalize(llvm::Triple::CanonicalForm::FOUR_IDENT)));
+  CmdArgs.push_back(Saver.save(llvm::join(Targets, ",")));
+
+#ifdef _WIN32
+  CmdArgs.push_back("-input=NUL");
+#else
+  CmdArgs.push_back("-input=/dev/null");
+#endif
+  for (const auto &[File, Triple] : InputFiles)
+    CmdArgs.push_back(Saver.save("-input=" + File));
+
+  CmdArgs.push_back(Saver.save("-output=" + *TempFileOrErr));
+
+  if (Error Err = executeCommands(*OffloadBundlerPath, CmdArgs))
+    return std::move(Err);
+
+  return *TempFileOrErr;
+}
+} // namespace shc
+
 namespace generic {
 Expected<StringRef> clang(ArrayRef<StringRef> InputFiles, const ArgList &Args,
                           uint16_t ActiveOffloadKindMask) {
@@ -565,8 +627,10 @@ Expected<StringRef> clang(ArrayRef<StringRef> InputFiles, const ArgList &Args,
   for (StringRef InputFile : InputFiles)
     CmdArgs.push_back(InputFile);
 
-  // If this is CPU offloading we copy the input libraries.
-  if (!Triple.isGPU()) {
+  // If this is CPU offloading we copy the input libraries. The SHC device is
+  // freestanding, so the host libraries are neither needed nor compatible with
+  // its bare metal target.
+  if (!Triple.isGPU() && !(ActiveOffloadKindMask & OFK_SHC)) {
     CmdArgs.push_back("-Wl,-Bsymbolic");
     CmdArgs.push_back("-shared");
     ArgStringList LinkerArgs;
@@ -648,6 +712,8 @@ Expected<StringRef> linkDevice(ArrayRef<StringRef> InputFiles,
   case Triple::spirv64:
   case Triple::systemz:
   case Triple::loongarch64:
+  case Triple::riscv32:
+  case Triple::riscv64:
     return generic::clang(InputFiles, Args, ActiveOffloadKindMask);
   default:
     return createStringError(Triple.getArchName() +
@@ -985,6 +1051,34 @@ bundleHIP(ArrayRef<OffloadingImage> Images, const ArgList &Args) {
   return std::move(Buffers);
 }
 
+/// Transforms the input \p Images into the SHC fat binary format. SHC reuses
+/// the clang-offload-bundler container used by the SHC toolchain.
+Expected<SmallVector<std::unique_ptr<MemoryBuffer>>>
+bundleSHC(ArrayRef<OffloadingImage> Images, const ArgList &Args) {
+  SmallVector<std::pair<StringRef, StringRef>, 4> InputFiles;
+  for (const OffloadingImage &Image : Images)
+    InputFiles.emplace_back(std::make_pair(Image.Image->getBufferIdentifier(),
+                                           Image.StringData.lookup("triple")));
+
+  auto FileOrErr = shc::fatbinary(InputFiles, Args);
+  if (!FileOrErr)
+    return FileOrErr.takeError();
+
+  llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> ImageOrError =
+      llvm::MemoryBuffer::getFileOrSTDIN(*FileOrErr);
+
+  SmallVector<std::unique_ptr<MemoryBuffer>> Buffers;
+  if (std::error_code EC = ImageOrError.getError()) {
+    if (DryRun)
+      ImageOrError = MemoryBuffer::getMemBuffer("", *FileOrErr);
+    else
+      return createFileError(*FileOrErr, EC);
+  }
+  Buffers.emplace_back(std::move(*ImageOrError));
+
+  return std::move(Buffers);
+}
+
 /// Transforms the input \p Images into the binary format the runtime expects
 /// for the given \p Kind.
 Expected<SmallVector<std::unique_ptr<MemoryBuffer>>>
@@ -1004,6 +1098,8 @@ bundleLinkedOutput(ArrayRef<OffloadingImage> Images, const ArgList &Args,
     return bundleCuda(Images, Args);
   case OFK_HIP:
     return bundleHIP(Images, Args);
+  case OFK_SHC:
+    return bundleSHC(Images, Args);
   default:
     return createStringError(getOffloadKindName(Kind) +
                              " bundling is not supported");

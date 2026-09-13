@@ -1,46 +1,43 @@
-// RUN: %clang -x shc --target=x86_64-unknown-linux-gnu -emit-llvm -S -o - %s \
-// RUN:   | FileCheck %s
-
-// When a fatbin is supplied it is embedded in the same section instead of
-// being left as an external symbol.
-// RUN: echo "SHCFATBIN" > %t.fatbin
-// RUN: %clang -x shc --target=x86_64-unknown-linux-gnu -emit-llvm -S -o - %s \
-// RUN:   -Xclang -fcuda-include-gpubinary -Xclang %t.fatbin \
-// RUN:   | FileCheck -check-prefix=EMBED %s
-
-// Test SHC host-side code generation: fatbin sections and magic, the module
+// Test SHC host-side code generation: the embedded fatbin sections, the module
 // constructor/destructor and the kernel launch stub.
+//
+// The device code is handed to the linker wrapper, which bundles it into a fat
+// binary, so the compilation has to produce real object files. The host side is
+// therefore inspected on the object level rather than as textual IR.
+//
+// RUN: %clang -x shc --target=x86_64-unknown-linux-gnu -c %s -o %t.o
+// RUN: llvm-objdump -h %t.o | FileCheck %s --check-prefix=SECT
+// RUN: llvm-nm %t.o | FileCheck %s --check-prefix=SYM
 
 __global__ void kern(int *x) { *x = 1; }
 
 void host(int *x) { kern<<<1, 1>>>(x); }
 
-// No fatbin is available at this point, so an external symbol is left in the
-// .shc_fatbin section for the linker to fill in.
-// CHECK: @__shc_fatbin = external constant i8, section ".shc_fatbin"
+// The device compilation produces a fatbin, which is embedded in the host
+// object.
+// SECT: .shc_fatbin
+// SECT: .shcFatBinSegment
 
-// 1397244742 == 0x53484346 == "SHCF"
-// CHECK: @__shc_fatbin_wrapper = internal constant { i32, i32, ptr, ptr } { i32 1397244742, i32 1, ptr @__shc_fatbin, ptr null }, section ".shcFatBinSegment"
+// The host-side launch stub for the kernel and its caller. The kernel itself
+// only exists on the device.
+// SYM: T _Z19__device_stub__kernPi
+// SYM: T _Z4hostPi
 
-// CHECK: @__shc_gpubin_handle = internal global ptr null
-// CHECK: @llvm.global_ctors {{.*}}@__shc_module_ctor
-// CHECK: @__shc_cuid_
+// The runtime entry points the generated code calls into.
+// SYM: U __shcPopCallConfiguration
+// SYM: U __shcPushCallConfiguration
+// SYM: U __shcRegisterFatBinary
+// SYM: U __shcRegisterFunction
+// SYM: U __shcUnregisterFatBinary
 
-// The kernel stub pops the configuration pushed at the launch site and
-// forwards it to the flat C runtime launch API.
-// CHECK-LABEL: define{{.*}}@_Z19__device_stub__kernPi
-// CHECK: call i32 @__shcPopCallConfiguration(
-// CHECK: call{{.*}}i32 @shc_launch_kernel(
+// The handle is suffixed with the compilation uid, and the fatbin wrapper is
+// registered by the module constructor.
+// SYM: __shc_cuid_
+// SYM: d __shc_fatbin_wrapper
+// SYM: b __shc_gpubin_handle
+// SYM: t __shc_module_ctor
+// SYM: t __shc_module_dtor
+// SYM: t __shc_register_globals
 
-// CHECK-LABEL: define{{.*}}@_Z4hostPi
-// CHECK: call{{.*}}@__shcPushCallConfiguration(
-
-// CHECK-LABEL: define internal void @__shc_module_ctor()
-// CHECK: call ptr @__shcRegisterFatBinary(ptr @__shc_fatbin_wrapper)
-// CHECK: call void @__shc_register_globals(
-
-// CHECK-LABEL: define internal void @__shc_module_dtor()
-// CHECK: call void @__shcUnregisterFatBinary(
-
-// EMBED: private constant [10 x i8] c"SHCFATBIN{{.*}}", section ".shc_fatbin", align 4096
-// EMBED: @__shc_fatbin_wrapper = internal constant { i32, i32, ptr, ptr } { i32 1397244742, i32 1, ptr @{{[0-9]+}}, ptr null }, section ".shcFatBinSegment"
+// The launch stub forwards to the flat C runtime launch API.
+// SYM: U shc_launch_kernel

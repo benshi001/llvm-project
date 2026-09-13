@@ -103,7 +103,7 @@ forAllAssociatedToolChains(Compilation &C, const JobAction &JA,
   // Apply Work on all the offloading tool chains associated with the current
   // action.
   for (Action::OffloadKind Kind : {Action::OFK_Cuda, Action::OFK_OpenMP,
-                                   Action::OFK_HIP, Action::OFK_SYCL}) {
+                                   Action::OFK_HIP, Action::OFK_SYCL, Action::OFK_SHC}) {
     if (JA.isHostOffloading(Kind)) {
       auto TCs = C.getOffloadToolChains(Kind);
       for (auto II = TCs.first, IE = TCs.second; II != IE; ++II)
@@ -5229,6 +5229,8 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   bool IsHIPDevice = JA.isDeviceOffloading(Action::OFK_HIP);
   bool IsSYCL = JA.isOffloading(Action::OFK_SYCL);
   bool IsSYCLDevice = JA.isDeviceOffloading(Action::OFK_SYCL);
+  bool IsSHC = JA.isOffloading(Action::OFK_SHC);
+  bool IsSHCDevice = JA.isDeviceOffloading(Action::OFK_SHC);
   bool IsOpenMPDevice = JA.isDeviceOffloading(Action::OFK_OpenMP);
   bool IsExtractAPI = isa<ExtractAPIJobAction>(JA);
   bool UsesLLVMOffloading = Args.hasFlag(
@@ -7431,7 +7433,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                       options::OPT_fno_hip_kernel_arg_name);
   }
 
-  if ((IsCuda || IsHIP || IsSYCL) && IsRDCMode)
+  if ((IsCuda || IsHIP || IsSYCL || IsSHC) && IsRDCMode)
     CmdArgs.push_back("-fgpu-rdc");
 
   if (IsCuda || IsHIP) {
@@ -7472,7 +7474,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // Forward -f options with positive and negative forms; we translate these by
   // hand.  Do not propagate PGO options to the GPU-side compilations as the
   // profile info is for the host-side compilation only.
-  if (!(IsCudaDevice || IsHIPDevice)) {
+  if (!(IsCudaDevice || IsHIPDevice || IsSHCDevice)) {
     if (Arg *A = getLastProfileSampleUseArg(Args)) {
       auto *PGOArg = Args.getLastArg(
           options::OPT_fprofile_generate, options::OPT_fprofile_generate_EQ,
@@ -8335,7 +8337,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   // them in the host compilation depending on the target.
   if (!HostOffloadingInputs.empty()) {
     bool UseOffloadIncludeBinary =
-        (IsCuda || IsHIP) &&
+        (IsCuda || IsHIP || IsSHC) &&
         (!IsRDCMode || Args.hasArg(options::OPT_cuda_emit_nvcc_abi)) &&
         !UsesLLVMOffloading;
     UseOffloadIncludeBinary |= IsSYCL && !IsRDCMode;
@@ -8355,7 +8357,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       CmdArgs.push_back("--cuda-emit-nvcc-abi");
   }
 
-  if (IsCuda || IsHIP) {
+  if (IsCuda || IsHIP || IsSHC) {
     // Determine the original source input.
     const Action *SourceAction = &JA;
     while (SourceAction->getKind() != Action::InputClass) {
@@ -8393,7 +8395,7 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   Args.AddLastArg(CmdArgs, options::OPT_foffload_implicit_host_device_templates,
                   options::OPT_fno_offload_implicit_host_device_templates);
 
-  if (IsCudaDevice || IsHIPDevice) {
+  if (IsCudaDevice || IsHIPDevice || IsSHCDevice) {
     StringRef InlineThresh =
         Args.getLastArgValue(options::OPT_fgpu_inline_threshold_EQ);
     if (!InlineThresh.empty()) {
@@ -9827,7 +9829,7 @@ void LinkerWrapper::ConstructJob(Compilation &C, const JobAction &JA,
 
   ArgStringList CmdArgs;
   for (Action::OffloadKind Kind : {Action::OFK_Cuda, Action::OFK_OpenMP,
-                                   Action::OFK_HIP, Action::OFK_SYCL}) {
+                                   Action::OFK_HIP, Action::OFK_SYCL, Action::OFK_SHC}) {
     auto TCRange = C.getOffloadToolChains(Kind);
     for (auto &I : llvm::make_range(TCRange)) {
       const ToolChain *TC = I.second;
@@ -9859,6 +9861,17 @@ void LinkerWrapper::ConstructJob(Compilation &C, const JobAction &JA,
       if (Kind == Action::OFK_OpenMP && !Args.hasArg(OPT_no_offloadlib) &&
           (TC->getTriple().isAMDGPU() || TC->getTriple().isNVPTX()))
         LinkerArgs.emplace_back("-lompdevice");
+
+      // The SHC device is a RISC-V target, and the default GNU linker does not
+      // understand its emulation mode. Force lld for the device link. This has
+      // to be a compiler argument: `-fuse-ld` is handled by clang itself, and
+      // linker arguments are forwarded to the linker via `-Xlinker`.
+      // The device is freestanding: no C runtime or compiler builtins library
+      // is available for the bare metal target, so do not link them in.
+      if (Kind == Action::OFK_SHC) {
+        CompilerArgs.emplace_back("-fuse-ld=lld");
+        CompilerArgs.emplace_back("-nostdlib");
+      }
 
       // For SPIR-V, pass some extra flags to `spirv-link`, the out-of-tree
       // SPIR-V linker. `spirv-link` isn't called in LTO mode so restrict these
@@ -10027,6 +10040,7 @@ void LinkerWrapper::ConstructJob(Compilation &C, const JobAction &JA,
   // binary directly.
   assert(JA.getType() == types::TY_HIP_FATBIN ||
          JA.getType() == types::TY_SYCL_FATBIN ||
+         JA.getType() == types::TY_SHC_FATBIN ||
          JA.getType() == types::TY_Image);
   if (JA.getType() != types::TY_Image) {
     CmdArgs.push_back("--emit-fatbin-only");

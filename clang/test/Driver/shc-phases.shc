@@ -1,14 +1,30 @@
 // Test that the SHC input type is recognized and that it goes through the
-// usual compilation phases.
+// expected host/device offloading phases.
 
 // RUN: %clang -x shc --target=x86_64-unknown-linux-gnu -ccc-print-phases -c %s 2>&1 \
 // RUN:   | FileCheck %s
 
-// CHECK: [[P0:[0-9]+]]: input, "{{.*}}shc-phases.shc", [[T:shc]]
-// CHECK: [[P1:[0-9]+]]: preprocessor, {[[P0]]}, [[T]]-cpp-output
-// CHECK: [[P2:[0-9]+]]: compiler, {[[P1]]}, ir
-// CHECK: [[P3:[0-9]+]]: backend, {[[P2]]}, assembler
-// CHECK: [[P4:[0-9]+]]: assembler, {[[P3]]}, object
+// The host compilation.
+// CHECK: [[P0:[0-9]+]]: input, "{{.*}}shc-phases.shc", [[T:shc]], (host-shc)
+// CHECK: [[P1:[0-9]+]]: preprocessor, {[[P0]]}, [[T]]-cpp-output, (host-shc)
+// CHECK: [[P2:[0-9]+]]: compiler, {[[P1]]}, ir, (host-shc)
+
+// The device compilation for the offload target.
+// CHECK: [[D0:[0-9]+]]: input, "{{.*}}shc-phases.shc", [[T]], (device-shc)
+// CHECK: [[D1:[0-9]+]]: preprocessor, {[[D0]]}, [[T]]-cpp-output, (device-shc)
+// CHECK: [[D2:[0-9]+]]: compiler, {[[D1]]}, ir, (device-shc)
+// CHECK: [[D3:[0-9]+]]: backend, {[[D2]]}, assembler, (device-shc)
+// CHECK: [[D4:[0-9]+]]: assembler, {[[D3]]}, object, (device-shc)
+// CHECK: [[D5:[0-9]+]]: offload, "device-shc (riscv32-unknown-unknown-elf)" {[[D4]]}, object
+// The device code is packaged and handed to the linker wrapper, which bundles
+// it into the SHC fat binary.
+// CHECK: [[D6:[0-9]+]]: llvm-offload-binary, {[[D5]]}, image, (device-shc)
+// CHECK: [[D7:[0-9]+]]: clang-linker-wrapper, {[[D6]]}, shc-fatbin, (device-shc)
+
+// The fatbin is fed back into the host compilation.
+// CHECK: [[P3:[0-9]+]]: offload, "host-shc (x86_64-unknown-linux-gnu)" {[[P2]]}, "device-shc (riscv32-unknown-unknown-elf)" {[[D7]]}, ir
+// CHECK: [[P4:[0-9]+]]: backend, {[[P3]]}, assembler, (host-shc)
+// CHECK: [[P5:[0-9]+]]: assembler, {[[P4]]}, object, (host-shc)
 
 // The .shc extension alone must select the SHC input type, without -x.
 //

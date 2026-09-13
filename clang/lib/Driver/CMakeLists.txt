@@ -86,6 +86,8 @@ add_clang_library(clangDriver
   ToolChains/OpenBSD.cpp
   ToolChains/PS4CPU.cpp
   ToolChains/Serenity.cpp
+  ToolChains/SHC.cpp
+  ToolChains/SHCUtility.cpp
   ToolChains/Solaris.cpp
   ToolChains/SPIRV.cpp
   ToolChains/SPIRVOpenMP.cpp

@@ -42,6 +42,7 @@
 #include "ToolChains/PPCFreeBSD.h"
 #include "ToolChains/PPCLinux.h"
 #include "ToolChains/PS4CPU.h"
+#include "ToolChains/SHC.h"
 #include "ToolChains/SPIRV.h"
 #include "ToolChains/SPIRVOpenMP.h"
 #include "ToolChains/SYCL.h"
@@ -1085,6 +1086,9 @@ static TripleSet inferOffloadToolchains(Compilation &C,
         llvm::Triple(C.getDefaultToolChain().getTriple().isArch64Bit()
                          ? llvm::Triple::spirv64
                          : llvm::Triple::spirv32));
+  else if (Archs.empty() && Kind == Action::OFK_SHC)
+    Triples.insert(
+        llvm::Triple(llvm::Triple::normalize("riscv32-unknown-elf")));
 
   // We need to dispatch these to the appropriate toolchain now.
   C.getArgs().eraseArg(options::OPT_offload_arch_EQ);
@@ -4073,6 +4077,8 @@ Driver::getOffloadArchs(Compilation &C, const llvm::opt::DerivedArgList &Args,
                                            : OffloadArch::HIPDefault()));
     } else if (Kind == Action::OFK_SYCL) {
       Archs.insert(StringRef());
+    } else if (Kind == Action::OFK_SHC) {
+      Archs.insert(StringRef());
     } else if (Kind == Action::OFK_OpenMP) {
       // Accept legacy `-march` device arguments for OpenMP.
       if (auto *Arg = C.getArgsForToolChain(&TC, /*BA=*/{}, Kind)
@@ -4170,7 +4176,8 @@ Driver::BuildOffloadingActions(Compilation &C, llvm::opt::DerivedArgList &Args,
   OffloadAction::DeviceDependences DDeps;
 
   const Action::OffloadKind OffloadKinds[] = {
-      Action::OFK_OpenMP, Action::OFK_Cuda, Action::OFK_HIP, Action::OFK_SYCL};
+      Action::OFK_OpenMP, Action::OFK_Cuda, Action::OFK_HIP, Action::OFK_SYCL,
+      Action::OFK_SHC};
 
   for (Action::OffloadKind Kind : OffloadKinds) {
     SmallVector<const ToolChain *, 2> ToolChains;
@@ -4188,7 +4195,8 @@ Driver::BuildOffloadingActions(Compilation &C, llvm::opt::DerivedArgList &Args,
 
     // The toolchain can be active for unsupported file types.
     if ((Kind == Action::OFK_Cuda && !types::isCuda(InputType)) ||
-        (Kind == Action::OFK_HIP && !types::isHIP(InputType)))
+        (Kind == Action::OFK_HIP && !types::isHIP(InputType)) ||
+        (Kind == Action::OFK_SHC && !types::isSHC(InputType)))
       continue;
 
     // Get the product of all bound architectures and toolchains.
@@ -4359,6 +4367,20 @@ Driver::BuildOffloadingActions(Compilation &C, llvm::opt::DerivedArgList &Args,
     PackagerAction = C.MakeAction<LinkerWrapperJobAction>(AL, FatbinType);
     DDep.add(*PackagerAction, *C.getOffloadToolChains(Kind).first->second,
              /*BA=*/{}, Kind);
+  } else if (!UsesLLVMOffloading && C.isOffloadingHostKind(Action::OFK_SHC) &&
+             !Args.hasFlag(options::OPT_fgpu_rdc, options::OPT_fno_gpu_rdc,
+                           false)) {
+    // SHC packages the device images and lets the linker wrapper bundle them
+    // into a fat binary, which the host compilation embeds. In RDC mode we
+    // fall through instead so the device code is linked at the final link.
+    Action *PackagerAction =
+        C.MakeAction<OffloadPackagerJobAction>(OffloadActions, types::TY_Image);
+    ActionList AL{PackagerAction};
+    PackagerAction =
+        C.MakeAction<LinkerWrapperJobAction>(AL, types::TY_SHC_FATBIN);
+    DDep.add(*PackagerAction,
+             *C.getOffloadToolChains(Action::OFK_SHC).first->second,
+             /*BA=*/{}, Action::OFK_SHC);
   } else {
     // Package all the offloading actions into a single output that can be
     // embedded in the host and linked.
@@ -6168,6 +6190,12 @@ const ToolChain &Driver::getOffloadToolChain(
       default:
         break;
       }
+      break;
+    case llvm::Triple::riscv32:
+    case llvm::Triple::riscv64:
+      if (Kind == Action::OFK_SHC)
+        TC = std::make_unique<toolchains::SHCToolChain>(*this, Target, Args,
+                                                        HostTC.get(), Kind);
       break;
     default:
       break;
