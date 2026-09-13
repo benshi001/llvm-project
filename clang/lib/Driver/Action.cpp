@@ -112,6 +112,8 @@ std::string Action::getOffloadingKindPrefix() const {
     return "device-hip";
   case OFK_SYCL:
     return "device-sycl";
+  case OFK_SHC:
+    return "device-shc";
 
     // TODO: Add other programming models here.
   }
@@ -131,6 +133,8 @@ std::string Action::getOffloadingKindPrefix() const {
     Res += "-openmp";
   if (ActiveOffloadKindMask & OFK_SYCL)
     Res += "-sycl";
+  if (ActiveOffloadKindMask & OFK_SHC)
+    Res += "-shc";
 
   // TODO: Add other programming models here.
 
@@ -169,6 +173,8 @@ StringRef Action::GetOffloadKindName(OffloadKind Kind) {
     return "hip";
   case OFK_SYCL:
     return "sycl";
+  case OFK_SHC:
+    return "shc";
 
     // TODO: Add other programming models here.
   }
@@ -323,7 +329,7 @@ void OffloadAction::DeviceDependences::add(Action &A, const ToolChain &TC,
   DeviceBoundArchs.push_back(BA);
 
   // Add each active offloading kind from a mask.
-  for (OffloadKind OKind : {OFK_OpenMP, OFK_Cuda, OFK_HIP, OFK_SYCL})
+  for (OffloadKind OKind : {OFK_OpenMP, OFK_Cuda, OFK_HIP, OFK_SYCL, OFK_SHC})
     if (OKind & OffloadKindMask)
       DeviceOffloadKinds.push_back(OKind);
 }

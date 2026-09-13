@@ -1106,6 +1106,12 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
                     }) ||
        C.getInputArgs().hasArg(options::OPT_hip_link) ||
        C.getInputArgs().hasArg(options::OPT_hipstdpar));
+  // SHC is activated by SHC inputs only. A --shc-link flag will be added
+  // together with the device tool chain.
+  bool IsSHC =
+      llvm::any_of(Inputs, [](std::pair<types::ID, const llvm::opt::Arg *> &I) {
+        return types::isSHC(I.first);
+      });
   bool IsSYCL = C.getInputArgs().hasFlag(options::OPT_fsycl,
                                          options::OPT_fno_sycl, false);
   bool IsOpenMPOffloading =
@@ -1120,7 +1126,8 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
       {IsCuda, Action::OFK_Cuda},
       {IsHIP, Action::OFK_HIP},
       {IsOpenMPOffloading, Action::OFK_OpenMP},
-      {IsSYCL, Action::OFK_SYCL}};
+      {IsSYCL, Action::OFK_SYCL},
+      {IsSHC, Action::OFK_SHC}};
   for (const auto &[Active, Kind] : ActiveKinds)
     if (Active)
       Kinds.insert(Kind);
@@ -1133,8 +1140,9 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
     return;
   }
 
-  // Initialize the compilation identifier used for unique CUDA / HIP names.
-  if (IsCuda || IsHIP)
+  // Initialize the compilation identifier used for unique CUDA / HIP / SHC
+  // names.
+  if (IsCuda || IsHIP || IsSHC)
     CUIDOpts = CUIDOptions(C.getArgs(), *this);
 
   // Get the list of requested offloading toolchains. If they were not
