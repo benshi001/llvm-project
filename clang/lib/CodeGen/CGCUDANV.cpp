@@ -1315,12 +1315,11 @@ void CGNVCUDARuntime::transformManagedVars() {
 // registered. The linker will provide a pointer to this section so we can
 // register the symbols with the linked device image.
 void CGNVCUDARuntime::createOffloadingEntries() {
-  // TODO(SHC): SHC needs its own OffloadKind::OFK_SHC. Until the SHC offload
-  // kind is added (offload action + clang-offload-bundler support), SHC RDC
-  // compilations must not claim to be CUDA.
-  llvm::object::OffloadKind Kind = CGM.getLangOpts().HIP
-                                       ? llvm::object::OffloadKind::OFK_HIP
-                                       : llvm::object::OffloadKind::OFK_Cuda;
+  llvm::object::OffloadKind Kind =
+      CGM.getLangOpts().SHC
+          ? llvm::object::OffloadKind::OFK_SHC
+          : CGM.getLangOpts().HIP ? llvm::object::OffloadKind::OFK_HIP
+                                  : llvm::object::OffloadKind::OFK_Cuda;
 
   llvm::Module &M = CGM.getModule();
   for (KernelInfo &I : EmittedKernels)
