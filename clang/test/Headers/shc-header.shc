@@ -1,0 +1,21 @@
+// Test that the SHC runtime wrapper header is picked up and provides the
+// host/device attributes plus the kernel launch API declaration.
+
+// RUN: %clang -x shc --target=x86_64-unknown-linux-gnu -E -o - %s \
+// RUN:   | FileCheck %s
+
+// __global__ comes from __clang_shc_runtime_wrapper.h. If the wrapper were
+// not force-included, this would be left as the bare identifier __global__.
+// CHECK: __attribute__((global)) void k() {}
+__global__ void k() {}
+
+// CHECK: __attribute__((device)) void d() {}
+__device__ void d() {}
+
+// CHECK: __attribute__((host)) void h() {}
+__host__ void h() {}
+
+// The launch API must be declared in every TU that launches a kernel, so
+// that CodeGen can find it.
+// CHECK: shc_launch_kernel
+void *p = (void *)&shc_launch_kernel;

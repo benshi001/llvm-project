@@ -88,6 +88,10 @@ set(hip_files
   __clang_hip_runtime_wrapper.h
   )
 
+set(shc_files
+  __clang_shc_runtime_wrapper.h
+  )
+
 set(hlsl_h
   hlsl.h
   )
@@ -337,6 +341,7 @@ set(files
   ${cuda_files}
   ${hexagon_files}
   ${hip_files}
+  ${shc_files}
   ${loongarch_files}
   ${mips_msa_files}
   ${opencl_files}
@@ -599,6 +604,7 @@ add_header_target("aarch64-resource-headers" "${aarch64_only_files};${aarch64_on
 add_header_target("cuda-resource-headers" "${cuda_files};${cuda_wrapper_files};${cuda_wrapper_bits_files};${cuda_wrapper_utility_files}")
 add_header_target("hexagon-resource-headers" "${hexagon_files}")
 add_header_target("hip-resource-headers" "${hip_files}")
+add_header_target("shc-resource-headers" "${shc_files}")
 add_header_target("loongarch-resource-headers" "${loongarch_files}")
 add_header_target("mips-resource-headers" "${mips_msa_files}")
 add_header_target("ppc-resource-headers" "${ppc_files};${ppc_wrapper_files}")
@@ -739,6 +745,12 @@ install(
   DESTINATION ${header_install_dir}
   EXCLUDE_FROM_ALL
   COMPONENT hip-resource-headers)
+
+install(
+  FILES ${shc_files}
+  DESTINATION ${header_install_dir}
+  EXCLUDE_FROM_ALL
+  COMPONENT shc-resource-headers)
 
 install(
   FILES ${loongarch_files}

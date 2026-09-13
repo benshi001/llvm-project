@@ -627,6 +627,12 @@ static void InitializeStandardPredefinedMacros(const TargetInfo &TI,
       Builder.defineMacro("HIP_API_PER_THREAD_DEFAULT_STREAM");
     }
   }
+  if (LangOpts.SHC) {
+    Builder.defineMacro("__SHC__");
+    Builder.defineMacro("__SHCC__");
+    if (LangOpts.CUDAIsDevice)
+      Builder.defineMacro("__SHC_DEVICE_COMPILE__");
+  }
 
   if (LangOpts.OpenACC)
     Builder.defineMacro("_OPENACC", "202506");
