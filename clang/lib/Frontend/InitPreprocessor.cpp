@@ -588,7 +588,7 @@ static void InitializeStandardPredefinedMacros(const TargetInfo &TI,
   if ((LangOpts.CUDA || LangOpts.isSYCL()) && LangOpts.GPURelocatableDeviceCode)
     Builder.defineMacro("__CLANG_RDC__");
   if (LangOpts.CUDA) {
-    if (!LangOpts.HIP)
+    if (!LangOpts.HIP && !LangOpts.SHC)
       Builder.defineMacro("__CUDA__");
     if (LangOpts.GPUDefaultStream ==
         LangOptions::GPUDefaultStreamKind::PerThread)

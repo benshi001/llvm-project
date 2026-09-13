@@ -8,6 +8,8 @@
 // RUN:   %s -std=foobar -c 2>&1 | FileCheck --match-full-lines %s
 // RUN: not %clang -x hip -nocudainc -nocudalib %s -std=foobar -c 2>&1 \
 // RUN:   | FileCheck --match-full-lines %s
+// RUN: not %clang -x shc %s -std=foobar -c 2>&1 \
+// RUN:   | FileCheck --match-full-lines %s
 
 // CHECK: error: invalid value 'foobar' in '-std=foobar'
 // CHECK-NEXT: note: use 'c++98' or 'c++03' for 'ISO C++ 1998 with amendments' standard

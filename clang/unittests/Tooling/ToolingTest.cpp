@@ -465,6 +465,13 @@ TEST_F(CommandLineExtractorTest, AcceptOffloadingSyntaxOnly) {
   EXPECT_NE(extractCC1Arguments(Args), nullptr);
 }
 
+TEST_F(CommandLineExtractorTest, AcceptSHCOffloading) {
+  addFile("test.c", "int main() {}\n");
+  const char *Args[] = {"clang", "-target", "arm64-apple-macosx11.0.0", "-x",
+                        "shc",   "test.c"};
+  EXPECT_NE(extractCC1Arguments(Args), nullptr);
+}
+
 TEST_F(CommandLineExtractorTest, AcceptExternalAssembler) {
   addFile("test.c", "int main() {}\n");
   const char *Args[] = {

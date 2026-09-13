@@ -1,0 +1,30 @@
+// Test that the SHC input type is recognized and that it goes through the
+// usual compilation phases.
+
+// RUN: %clang -x shc --target=x86_64-unknown-linux-gnu -ccc-print-phases -c %s 2>&1 \
+// RUN:   | FileCheck %s
+
+// CHECK: [[P0:[0-9]+]]: input, "{{.*}}shc-phases.shc", [[T:shc]]
+// CHECK: [[P1:[0-9]+]]: preprocessor, {[[P0]]}, [[T]]-cpp-output
+// CHECK: [[P2:[0-9]+]]: compiler, {[[P1]]}, ir
+// CHECK: [[P3:[0-9]+]]: backend, {[[P2]]}, assembler
+// CHECK: [[P4:[0-9]+]]: assembler, {[[P3]]}, object
+
+// The .shc extension alone must select the SHC input type, without -x.
+//
+// RUN: %clang --target=x86_64-unknown-linux-gnu -ccc-print-phases -c %s 2>&1 \
+// RUN:   | FileCheck %s
+
+// SHC is handed over to cc1 as "-x shc".
+//
+// RUN: %clang -### -x shc --target=x86_64-unknown-linux-gnu -c %s 2>&1 \
+// RUN:   | FileCheck -check-prefix=CC1 %s
+// CC1: "-cc1"
+// CC1-SAME: "-x" "shc"
+
+// Preprocessed SHC sources use the shc-cpp-output type.
+//
+// RUN: %clang -### -x shc-cpp-output --target=x86_64-unknown-linux-gnu -c %s 2>&1 \
+// RUN:   | FileCheck -check-prefix=PPOUT %s
+// PPOUT: "-cc1"
+// PPOUT-SAME: "-x" "shc-cpp-output"

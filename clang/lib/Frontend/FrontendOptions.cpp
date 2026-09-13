@@ -33,6 +33,7 @@ InputKind FrontendOptions::getInputKindForExtension(StringRef Extension) {
       .Case("clcpp", Language::OpenCLCXX)
       .Cases({"cu", "cuh"}, Language::CUDA)
       .Case("hip", Language::HIP)
+      .Case("shc", Language::SHC)
       .Cases({"ll", "bc"}, Language::LLVM_IR)
       .Case("hlsl", Language::HLSL)
       .Case("cir", Language::CIR)

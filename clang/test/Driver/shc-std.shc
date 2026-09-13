@@ -1,0 +1,26 @@
+// Test language standard handling for the SHC language. SHC shares the C++
+// language standards.
+
+// No -std= is passed down to cc1: SHC picks up the default C++ standard on
+// its own.
+//
+// RUN: %clang -### -x shc --target=x86_64-unknown-linux-gnu -c %s 2>&1 \
+// RUN:   | FileCheck -check-prefixes=DEFAULT %s
+// DEFAULT: "-cc1"
+// DEFAULT-NOT: "-std="
+
+// An explicitly specified standard is forwarded to cc1.
+//
+// RUN: %clang -### -x shc --target=x86_64-unknown-linux-gnu -std=c++17 -c %s 2>&1 \
+// RUN:   | FileCheck -check-prefixes=SPECIFIED %s
+// SPECIFIED: "-std=c++17"
+
+// MSVC targets keep their own default standard.
+//
+// RUN: %clang -### -x shc --target=x86_64-pc-windows-msvc -c %s 2>&1 \
+// RUN:   | FileCheck -check-prefixes=MSVC-DEF %s
+// MSVC-DEF: "-std=c++14"
+
+// RUN: %clang -### -x shc --target=x86_64-pc-windows-msvc -std=c++17 -c %s 2>&1 \
+// RUN:   | FileCheck -check-prefixes=MSVC-SPEC %s
+// MSVC-SPEC: "-std=c++17"
