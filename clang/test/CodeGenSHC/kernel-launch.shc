@@ -1,0 +1,46 @@
+// RUN: %clang -x shc --target=x86_64-unknown-linux-gnu -emit-llvm -S -o - %s \
+// RUN:   | FileCheck %s
+
+// When a fatbin is supplied it is embedded in the same section instead of
+// being left as an external symbol.
+// RUN: echo "SHCFATBIN" > %t.fatbin
+// RUN: %clang -x shc --target=x86_64-unknown-linux-gnu -emit-llvm -S -o - %s \
+// RUN:   -Xclang -fcuda-include-gpubinary -Xclang %t.fatbin \
+// RUN:   | FileCheck -check-prefix=EMBED %s
+
+// Test SHC host-side code generation: fatbin sections and magic, the module
+// constructor/destructor and the kernel launch stub.
+
+__global__ void kern(int *x) { *x = 1; }
+
+void host(int *x) { kern<<<1, 1>>>(x); }
+
+// No fatbin is available at this point, so an external symbol is left in the
+// .shc_fatbin section for the linker to fill in.
+// CHECK: @__shc_fatbin = external constant i8, section ".shc_fatbin"
+
+// 1397244742 == 0x53484346 == "SHCF"
+// CHECK: @__shc_fatbin_wrapper = internal constant { i32, i32, ptr, ptr } { i32 1397244742, i32 1, ptr @__shc_fatbin, ptr null }, section ".shcFatBinSegment"
+
+// CHECK: @__shc_gpubin_handle = internal global ptr null
+// CHECK: @llvm.global_ctors {{.*}}@__shc_module_ctor
+// CHECK: @__shc_cuid_
+
+// The kernel stub pops the configuration pushed at the launch site and
+// forwards it to the flat C runtime launch API.
+// CHECK-LABEL: define{{.*}}@_Z19__device_stub__kernPi
+// CHECK: call i32 @__shcPopCallConfiguration(
+// CHECK: call{{.*}}i32 @shc_launch_kernel(
+
+// CHECK-LABEL: define{{.*}}@_Z4hostPi
+// CHECK: call{{.*}}@__shcPushCallConfiguration(
+
+// CHECK-LABEL: define internal void @__shc_module_ctor()
+// CHECK: call ptr @__shcRegisterFatBinary(ptr @__shc_fatbin_wrapper)
+// CHECK: call void @__shc_register_globals(
+
+// CHECK-LABEL: define internal void @__shc_module_dtor()
+// CHECK: call void @__shcUnregisterFatBinary(
+
+// EMBED: private constant [10 x i8] c"SHCFATBIN{{.*}}", section ".shc_fatbin", align 4096
+// EMBED: @__shc_fatbin_wrapper = internal constant { i32, i32, ptr, ptr } { i32 1397244742, i32 1, ptr @{{[0-9]+}}, ptr null }, section ".shcFatBinSegment"

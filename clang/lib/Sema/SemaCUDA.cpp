@@ -1233,6 +1233,11 @@ std::string SemaCUDA::getConfigureFuncName() const {
     return getLangOpts().HIPUseNewLaunchAPI ? "__hipPushCallConfiguration"
                                             : "hipConfigureCall";
 
+  // SHC always uses the new launch sequence, whose pop side is emitted by
+  // CodeGen as __shcPopCallConfiguration.
+  if (getLangOpts().SHC)
+    return "__shcPushCallConfiguration";
+
   // New CUDA kernel launch sequence.
   if (CudaFeatureEnabled(getASTContext().getTargetInfo().getSDKVersion(),
                          CudaFeature::CUDA_USES_NEW_LAUNCH))
