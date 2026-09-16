@@ -17,5 +17,13 @@ __host__ void h() {}
 
 // The launch API must be declared in every TU that launches a kernel, so
 // that CodeGen can find it.
-// CHECK: shc_launch_kernel
-void *p = (void *)&shc_launch_kernel;
+// CHECK: __shcLaunchKernel
+void *p = (void *)&__shcLaunchKernel;
+
+// The launch configuration pair used by the launch site and by the generated
+// kernel stub.
+// CHECK: __shcPushCallConfiguration
+void *q = (void *)&__shcPushCallConfiguration;
+
+// CHECK: __shcPopCallConfiguration
+void *r = (void *)&__shcPopCallConfiguration;

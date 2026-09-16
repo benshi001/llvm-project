@@ -3771,6 +3771,9 @@ void Driver::BuildActions(Compilation &C, DerivedArgList &Args,
     }
   }
 
+  // `--offload-link` asks for the linker wrapper job created below.
+  Args.ClaimAllArgs(options::OPT_offload_link);
+
   // Add a link action if necessary.
   if (!LinkerInputs.empty()) {
     Action *LA;
