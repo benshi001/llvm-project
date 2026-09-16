@@ -203,3 +203,13 @@ kernel stub body     -> shc_launch_kernel(&stub, gridDim, blockDim, args, shmem,
 | 加卸载种类 | `clang/include/clang/Driver/Action.h` + `llvm/include/llvm/Object/OffloadBinary.h` |
 | 内核启动 / fatbin 嵌入 | `clang/lib/CodeGen/CGCUDANV.cpp` |
 | device 编译 / 链接、fatbin 打包 | `clang/lib/Driver/ToolChains/SHC.cpp`、`SHCUtility.cpp` |
+
+---
+
+## 11. 补充：SHC 恒 RDC 与 `-S` 行为
+
+- **SHC 必须走 RDC**：device 代码始终可重定位，fatbin 只在最终链接时由 linker-wrapper 生成。driver 显式拒绝 `-fno-gpu-rdc`（`Driver.cpp` 的 `CreateOffloadingDeviceToolChains`，用 `err_drv_argument_not_allowed_with` 报 `-fno-gpu-rdc not allowed with SHC`），`Clang.cpp` 里 `IsRDCMode` 的默认值改为 `IsSYCL || IsSHC`。原先"每个 TU 编译期就产出 fatbin"的 `LinkerWrapperJobAction(TY_SHC_FATBIN)` 分支已删除，SHC 与 SYCL / CUDA-RDC 走同一条通用分支。
+  - 后果：`-c` 的产物里只有 `.llvm.offloading` / `.llvm.rodata.offloading` 与 `.offloading.entry.<kernel>`，不再有 `.shc_fatbin`；`__shcRegisterFatBinary` 等注册符号也随之不在编译期出现。
+  - `bundleSHC` / `shc::fatbinary` 保留，供最终链接使用。
+- **`-S` 只影响 host**：device 侧不受 `-S` 影响，仍跑完整流程——`Driver.cpp` 里 device 的 phase 列表在 SHC + `-S` 时固定按 `phases::Assemble` 计算（`preprocessor → compiler → backend → assembler`），产出 object 后照常生成 offload image（`llvm-offload-binary ... kind=shc`）；host 则停在汇编、输出 `.s`。因 SHC 恒 RDC，该汇编里只有 `.llvm.offloading`（device image 数据），没有 `.shc_fatbin`。
+- 测试：`clang/test/Driver/shc-rdc.shc`（新增：`-fno-gpu-rdc` 诊断；`-S` 下 device 仍完整编译并产出 offload image、host 只出汇编）、`clang/test/Driver/shc-phases.shc`、`clang/test/CodeGenSHC/kernel-launch.shc`（改为检查 RDC 产物）。

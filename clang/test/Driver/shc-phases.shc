@@ -16,13 +16,13 @@
 // CHECK: [[D3:[0-9]+]]: backend, {[[D2]]}, assembler, (device-shc)
 // CHECK: [[D4:[0-9]+]]: assembler, {[[D3]]}, object, (device-shc)
 // CHECK: [[D5:[0-9]+]]: offload, "device-shc (riscv32-unknown-unknown-elf)" {[[D4]]}, object
-// The device code is packaged and handed to the linker wrapper, which bundles
-// it into the SHC fat binary.
+// SHC is always relocatable, so the device code is only packaged here and
+// carried to the final link, where the linker wrapper links it into the SHC
+// fat binary.
 // CHECK: [[D6:[0-9]+]]: llvm-offload-binary, {[[D5]]}, image, (device-shc)
-// CHECK: [[D7:[0-9]+]]: clang-linker-wrapper, {[[D6]]}, shc-fatbin, (device-shc)
 
-// The fatbin is fed back into the host compilation.
-// CHECK: [[P3:[0-9]+]]: offload, "host-shc (x86_64-unknown-linux-gnu)" {[[P2]]}, "device-shc (riscv32-unknown-unknown-elf)" {[[D7]]}, ir
+// The device image is fed back into the host compilation.
+// CHECK: [[P3:[0-9]+]]: offload, "host-shc (x86_64-unknown-linux-gnu)" {[[P2]]}, "device-shc (x86_64-unknown-linux-gnu)" {[[D6]]}, ir
 // CHECK: [[P4:[0-9]+]]: backend, {[[P3]]}, assembler, (host-shc)
 // CHECK: [[P5:[0-9]+]]: assembler, {[[P4]]}, object, (host-shc)
 

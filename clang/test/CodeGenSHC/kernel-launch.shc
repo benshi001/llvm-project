@@ -1,9 +1,10 @@
-// Test SHC host-side code generation: the embedded fatbin sections, the module
-// constructor/destructor and the kernel launch stub.
+// Test SHC host-side code generation with relocatable device code: the device
+// image is packaged into the host object, and the kernel launch stub is
+// emitted on the host.
 //
-// The device code is handed to the linker wrapper, which bundles it into a fat
-// binary, so the compilation has to produce real object files. The host side is
-// therefore inspected on the object level rather than as textual IR.
+// SHC is always relocatable, so the fat binary is only created by the linker
+// wrapper at the final link and the compilation has to be inspected on the
+// object level rather than as textual IR.
 //
 // RUN: %clang -x shc --target=x86_64-unknown-linux-gnu -c %s -o %t.o
 // RUN: llvm-objdump -h %t.o | FileCheck %s --check-prefix=SECT
@@ -13,31 +14,23 @@ __global__ void kern(int *x) { *x = 1; }
 
 void host(int *x) { kern<<<1, 1>>>(x); }
 
-// The device compilation produces a fatbin, which is embedded in the host
-// object.
-// SECT: .shc_fatbin
-// SECT: .shcFatBinSegment
+// The device image is carried to the link in the offloading sections; no fat
+// binary is emitted at compile time.
+// SECT: .llvm.offloading
+// SECT-NOT: .shc_fatbin
 
-// The host-side launch stub for the kernel and its caller. The kernel itself
-// only exists on the device.
+// The offload entry for the kernel, the host-side launch stub for it and its
+// caller. The kernel itself only exists on the device.
+// SYM: .offloading.entry._Z4kernPi
 // SYM: T _Z19__device_stub__kernPi
 // SYM: T _Z4hostPi
 
 // The runtime entry points the generated code calls into.
 // SYM: U __shcPopCallConfiguration
 // SYM: U __shcPushCallConfiguration
-// SYM: U __shcRegisterFatBinary
-// SYM: U __shcRegisterFunction
-// SYM: U __shcUnregisterFatBinary
 
-// The handle is suffixed with the compilation uid, and the fatbin wrapper is
-// registered by the module constructor.
+// The handle is suffixed with the compilation uid.
 // SYM: __shc_cuid_
-// SYM: d __shc_fatbin_wrapper
-// SYM: b __shc_gpubin_handle
-// SYM: t __shc_module_ctor
-// SYM: t __shc_module_dtor
-// SYM: t __shc_register_globals
 
 // The launch stub forwards to the flat C runtime launch API.
 // SYM: U shc_launch_kernel

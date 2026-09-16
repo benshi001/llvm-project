@@ -1,0 +1,32 @@
+// SHC device code is always relocatable, so the non-RDC mode cannot be
+// requested.
+
+// RUN: not %clang -x shc --target=x86_64-unknown-linux-gnu -fno-gpu-rdc -c %s 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=ERR
+// ERR: error: invalid argument '-fno-gpu-rdc' not allowed with 'SHC'
+
+// The cuda spelling of the option is rejected as well.
+//
+// RUN: not %clang -x shc --target=x86_64-unknown-linux-gnu -fno-cuda-rdc -c %s 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=ERR
+
+// -fgpu-rdc stays accepted.
+//
+// RUN: %clang -x shc --target=x86_64-unknown-linux-gnu -fgpu-rdc -c %s -o %t.o
+
+// -S only stops the host compilation at assembly: the device side still runs
+// the full pipeline and produces its offload image.
+//
+// RUN: %clang -x shc --target=x86_64-unknown-linux-gnu -S %s -o %t.s -### 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=DEV
+// DEV: "-triple" "riscv32-unknown-unknown-elf" {{.*}} "-emit-obj"
+// DEV: llvm-offload-binary{{.*}}kind=shc
+// DEV: "-triple" "x86_64-unknown-linux-gnu" {{.*}} "-S"
+
+// RUN: %clang -x shc --target=x86_64-unknown-linux-gnu -S %s -o %t.s
+// RUN: FileCheck %s --check-prefix=ASM --input-file=%t.s
+// ASM-NOT: .shc_fatbin
+
+__global__ void kern(int *x) { *x = 1; }
+
+void host(int *x) { kern<<<1, 1>>>(x); }
