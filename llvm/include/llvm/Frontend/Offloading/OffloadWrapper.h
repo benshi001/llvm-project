@@ -55,6 +55,12 @@ LLVM_ABI llvm::Error wrapHIPBinary(llvm::Module &M, llvm::ArrayRef<char> Images,
                                    llvm::StringRef Suffix = "",
                                    bool EmitSurfacesAndTextures = true);
 
+/// Wraps the input bundled image into the module \p M as the `__shc_fatbin`
+/// global symbol. The SHC host objects already register the fat binary with
+/// the runtime from their module constructor, so only the image itself has to
+/// be defined at link time.
+LLVM_ABI llvm::Error wrapSHCBinary(llvm::Module &M, llvm::ArrayRef<char> Image);
+
 struct SYCLJITOptions {
   // Target/compiler specific options that are passed to the device compiler at
   // runtime.

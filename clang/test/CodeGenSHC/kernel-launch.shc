@@ -25,12 +25,11 @@ void host(int *x) { kern<<<1, 1>>>(x); }
 // SYM: T _Z19__device_stub__kernPi
 // SYM: T _Z4hostPi
 
-// The runtime entry points the generated code calls into.
+// The runtime entry points the generated code calls into. The launch stub
+// forwards to the flat C runtime launch API.
+// SYM: U __shcLaunchKernel
 // SYM: U __shcPopCallConfiguration
 // SYM: U __shcPushCallConfiguration
 
 // The handle is suffixed with the compilation uid.
 // SYM: __shc_cuid_
-
-// The launch stub forwards to the flat C runtime launch API.
-// SYM: U shc_launch_kernel

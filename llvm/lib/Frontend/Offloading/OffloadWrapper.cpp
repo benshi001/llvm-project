@@ -751,6 +751,22 @@ Error offloading::wrapHIPBinary(Module &M, ArrayRef<char> Image,
   return Error::success();
 }
 
+Error offloading::wrapSHCBinary(Module &M, ArrayRef<char> Image) {
+  // The SHC host objects keep the module constructor that registers the fat
+  // binary with the runtime, they only reference the image through the
+  // `__shc_fatbin` symbol. Provide that definition here so the link resolves.
+  Constant *ImageData = ConstantDataArray::get(M.getContext(), Image);
+  auto *Fatbin = new GlobalVariable(M, ImageData->getType(),
+                                    /*isConstant=*/true,
+                                    GlobalValue::ExternalLinkage, ImageData,
+                                    "__shc_fatbin");
+  const Triple T(M.getTargetTriple());
+  Fatbin->setSection(T.isOSBinFormatMachO() ? "__SHC,__shc_fatbin"
+                                            : ".shc_fatbin");
+  Fatbin->setAlignment(Align(4096));
+  return Error::success();
+}
+
 Error llvm::offloading::wrapSYCLBinaries(llvm::Module &M, ArrayRef<char> Buffer,
                                          SYCLJITOptions Options,
                                          bool IsFinalizedImage,

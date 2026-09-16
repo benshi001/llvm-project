@@ -13,7 +13,7 @@
 | 输入类型 | `TY_SHC` / `TY_PP_SHC` / `TY_SHC_DEVICE` / `TY_SHC_FATBIN` | `TY_HIP*` |
 | 卸载种类 | `Action::OFK_SHC`、`OffloadKind::OFK_SHC`、bundle kind `"shc"` | `OFK_HIP` / `"hip"` |
 | 工具链 | `SHCToolChain`（device triple `riscv32-unknown-elf`，链接用 `ld.lld -r`） | `HIPAMDToolChain` / `AMDGCN::Linker` |
-| CodeGen | Prefix `shc`，magic `"SHCF"`，section `.shc_fatbin`，launch `shc_launch_kernel` | `hip` / `HIPF` / `.hip_fatbin` / `hipLaunchKernel` |
+| CodeGen | Prefix `shc`，magic `"SHCF"`，section `.shc_fatbin`，launch `__shcLaunchKernel` | `hip` / `HIPF` / `.hip_fatbin` / `hipLaunchKernel` |
 
 ---
 
@@ -99,14 +99,14 @@ clang-offload-bundler -type=o -bundle-align=4096 \
 
 | 文件 | 改动 |
 | --- | --- |
-| 新建 `clang/lib/Headers/__clang_shc_runtime_wrapper.h` | 照 `__clang_hip_runtime_wrapper.h:19-29`，在 `#if __SHC__` 下定义 `__host__/__device__/__global__/__shared__/__constant__/__managed__`；**必须声明 `shc_launch_kernel`**（见 §6） |
+| 新建 `clang/lib/Headers/__clang_shc_runtime_wrapper.h` | 照 `__clang_hip_runtime_wrapper.h:19-29`，在 `#if __SHC__` 下定义 `__host__/__device__/__global__/__shared__/__constant__/__managed__`；**必须声明 `__shcLaunchKernel`**（见 §6） |
 | `clang/lib/Headers/CMakeLists.txt:88` 区域 | 注册该头 |
 | `clang/lib/Frontend/InitPreprocessor.cpp:597-627` | 定义 `__SHC__`、`__SHCC__`、`__SHC_DEVICE_COMPILE__` 等 |
 
-> ⚠️ `clang/lib/CodeGen/CGCUDANV.cpp:459-463` 会在 TU 里 **lookup** launch 函数名，找不到就报错 `"Can't find declaration for …"`。所以 `shc_launch_kernel` 必须由 wrapper 头声明，签名建议对齐 HIP：
+> ⚠️ `clang/lib/CodeGen/CGCUDANV.cpp:459-463` 会在 TU 里 **lookup** launch 函数名，找不到就报错 `"Can't find declaration for …"`。所以 `__shcLaunchKernel` 必须由 wrapper 头声明，签名建议对齐 HIP：
 >
 > ```cpp
-> int shc_launch_kernel(const void *func, dim3 gridDim, dim3 blockDim,
+> int __shcLaunchKernel(const void *func, dim3 gridDim, dim3 blockDim,
 >                       void **args, size_t sharedMem, void *stream);
 > ```
 >
@@ -120,7 +120,7 @@ clang-offload-bundler -type=o -bundle-align=4096 \
 | --- | --- |
 | `:41` | 加 `constexpr unsigned SHCFatMagic = 0x53484346; // "SHCF"` |
 | `:257-262` | `else if (CGM.getLangOpts().SHC) Prefix = "shc";` → 自动得到 `__shc_module_ctor`、`__shcRegisterFatBinary`、`__shc_register_globals`、`__shc_fatbin_wrapper` |
-| **`:442-450`（launch API）** | **关键**：SHC 不走 `addPrefixToName`，直接 `LaunchKernelName = "shc_launch_kernel"` |
+| **`:442-450`（launch API）** | **关键**：SHC 不走 `addPrefixToName`，直接 `LaunchKernelName = "__shcLaunchKernel"` |
 | `:341` | `emitDeviceStub` 中加 `\|\| CGF.getLangOpts().SHC`，走 `emitDeviceStubBodyNew`（打包 `void** args`） |
 | `:843-958` `makeModuleCtorFunction` | 把 `bool IsHIP` 扩成 `IsHIP \|\| IsSHC`（建议改名 `IsHIPOrSHC`）：<br>• `:849` `if (CudaGpuBinaryFileName.empty() && !IsHIPOrSHC) return nullptr;`<br>• `:903` 分支：section `.shc_fatbin` / `.shcFatBinSegment` / `__shc_module_id`；外部符号 `__shc_fatbin[_CUID]`（`:925-932` 那条 RDC 路径正是"在 x86 obj 里留 section，内容由链接期填充"）<br>• `FatMagic = SHCFatMagic` |
 | `:984-1000` | `__shc_gpubin_handle[_CUID]`（HIP ABI 里"每个链接模块只有一个 fatbin，但有多个 ctor"的判重逻辑，SHC 同样需要） |
@@ -157,7 +157,7 @@ __shc_gpubin_handle[_CUID]
 __shc_module_ctor    -> __shcRegisterFatBinary(__shc_fatbin_wrapper)
                         __shc_register_globals(handle)
 .llvm.offloading     <- offloading entries（kernel 符号表，RDC 必需）
-kernel stub body     -> shc_launch_kernel(&stub, gridDim, blockDim, args, shmem, stream)
+kernel stub body     -> __shcLaunchKernel(&stub, gridDim, blockDim, args, shmem, stream)
 ```
 
 ---
@@ -173,8 +173,8 @@ kernel stub body     -> shc_launch_kernel(&stub, gridDim, blockDim, args, shmem,
 ## 9. 建议落地顺序
 
 1. **§1 + §2**（语言开关 + 输入类型）→ 能跑 `clang++ -x shc -c a.shc`，host 侧单趟编译通
-2. **§5**（宏 + wrapper 头）→ `__device__/__global__/__host__`、`shc_launch_kernel` 可用
-3. **§6**（CodeGen：Prefix、magic、section、launch 名）→ host obj 里出现 `shc_launch_kernel` 调用与 `.shc_fatbin`
+2. **§5**（宏 + wrapper 头）→ `__device__/__global__/__host__`、`__shcLaunchKernel` 可用
+3. **§6**（CodeGen：Prefix、magic、section、launch 名）→ host obj 里出现 `__shcLaunchKernel` 调用与 `.shc_fatbin`
 4. **§3**（OFK_SHC + bundler kind）→ 卸载动作图成立
 5. **§4**（SHC ToolChain + `ld.lld -r` + fatbin 打包）→ 打通 device 侧
 6. 补测试：`clang/test/Driver/shc-*.shc`、`clang/test/CodeGenSHC/kernel-launch.shc`（参考 `clang/test/CodeGenCUDA/kernel-stub-name.cu`）

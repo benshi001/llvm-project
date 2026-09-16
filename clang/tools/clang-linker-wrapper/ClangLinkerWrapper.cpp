@@ -589,6 +589,7 @@ Expected<StringRef> clang(ArrayRef<StringRef> InputFiles, const ArgList &Args,
 
   const llvm::Triple Triple(Args.getLastArgValue(OPT_triple_EQ));
   StringRef Arch = Args.getLastArgValue(OPT_arch_EQ);
+  bool IsSHCDevice = ActiveOffloadKindMask & OFK_SHC;
   // Create a new file to write the linked device image to. Assume that the
   // input filename already has the device and architecture.
   std::string OutputFileBase =
@@ -615,13 +616,22 @@ Expected<StringRef> clang(ArrayRef<StringRef> InputFiles, const ArgList &Args,
     Triple.isAMDGPU() ? CmdArgs.push_back(Args.MakeArgString("-mcpu=" + Arch))
                       : CmdArgs.push_back(Args.MakeArgString("-march=" + Arch));
 
+  // SHC merges the device objects into one bigger relocatable ELF instead of
+  // producing a final device image: the device program is only laid out later,
+  // so the relocations have to be preserved. The driver level `-r` also leaves
+  // out the start files and libraries the freestanding device cannot use.
+  if (IsSHCDevice)
+    CmdArgs.push_back("-r");
+
   // Forward all of the `--offload-opt` and `-mllvm` options to the device.
   for (auto &Arg : Args.filtered(OPT_offload_opt_eq_minus, OPT_mllvm))
     CmdArgs.append(
         {"-Xlinker",
          Args.MakeArgString("--plugin-opt=" + StringRef(Arg->getValue()))});
 
-  if (!Triple.isNVPTX() && !Triple.isSPIRV())
+  // Undefined symbols are expected in a relocatable link, so this is only
+  // meaningful for a fully linked device image.
+  if (!Triple.isNVPTX() && !Triple.isSPIRV() && !IsSHCDevice)
     CmdArgs.push_back("-Wl,--no-undefined");
 
   for (StringRef InputFile : InputFiles)
@@ -894,6 +904,12 @@ wrapDeviceImages(ArrayRef<std::unique_ptr<MemoryBuffer>> Buffers,
   case OFK_HIP:
     if (Error Err = offloading::wrapHIPBinary(
             M, BuffersToWrap.front(), offloading::getOffloadEntryArray(M)))
+      return std::move(Err);
+    break;
+  case OFK_SHC:
+    // The registration code is emitted by the SHC host objects, the wrapper
+    // only supplies the linked device image they reference.
+    if (Error Err = offloading::wrapSHCBinary(M, BuffersToWrap.front()))
       return std::move(Err);
     break;
   case OFK_SYCL: {

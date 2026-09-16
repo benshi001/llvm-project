@@ -13,7 +13,7 @@
 | 5 | `3f6db08929a4` | SHC: initial support in the driver（含方案 C） |
 | 6 | `f95662b15298` | shc: supplement some documents |
 
-目标形态：`-x shc` 的源文件分别编译出 host（x86_64）与 device（riscv32-unknown-elf），device 侧产物打成 SHC fatbin，再由 host 编译嵌入 `.shc_fatbin` 段，运行时经 `__shcRegisterFatBinary` / `shc_launch_kernel` 完成 kernel 启动。
+目标形态：`-x shc` 的源文件分别编译出 host（x86_64）与 device（riscv32-unknown-elf），device 侧产物打成 SHC fatbin，再由 host 编译嵌入 `.shc_fatbin` 段，运行时经 `__shcRegisterFatBinary` / `__shcLaunchKernel` 完成 kernel 启动。
 
 ---
 
@@ -62,7 +62,7 @@ SHC 语义上是一个新的**源语言**（有 `__global__`/`<<<>>>` 语法）�
 
 | 文件 | 修改 |
 |---|---|
-| `clang/lib/Headers/__clang_shc_runtime_wrapper.h`（新增，65 行） | 定义 `__host__`/`__device__`/`__global__`/`__shared__`/`__constant__`/`__managed__` 到相应 attribute；声明 `dim3`、`shc_launch_kernel(const void*, dim3, dim3, void**, size_t, void*)`、`__shcPushCallConfiguration` |
+| `clang/lib/Headers/__clang_shc_runtime_wrapper.h`（新增，65 行） | 定义 `__host__`/`__device__`/`__global__`/`__shared__`/`__constant__`/`__managed__` 到相应 attribute；声明 `dim3`、`__shcLaunchKernel(const void*, dim3, dim3, void**, size_t, void*)`、`__shcPushCallConfiguration` |
 | `clang/lib/Headers/CMakeLists.txt` | 安装该头文件 |
 | `llvm/utils/gn/secondary/clang/lib/Headers/BUILD.gn` | GN 构建同步 |
 | `clang/lib/Driver/ToolChains/Clang.cpp` | 按输入类型强制 `-include __clang_shc_runtime_wrapper.h` |
@@ -89,9 +89,9 @@ CHECK-NOT: __SHC_DEVICE_COMPILE__     # host 侧不定义
 
 ### 为什么
 
-SHC 没有厂商 runtime 头文件（CUDA 有 `cuda_runtime.h`，HIP 有 `hip_runtime.h`），而 CodeGen 生成 kernel stub 时要求 `shc_launch_kernel` 必须在 TU 中已声明，否则直接报 `Can't find declaration for shc_launch_kernel`。因此做一个编译器私有的 `-include` 头，把 attribute 宏和 launch API 声明补齐，让"裸 SHC 源码"无需 include 任何东西即可编译。
+SHC 没有厂商 runtime 头文件（CUDA 有 `cuda_runtime.h`，HIP 有 `hip_runtime.h`），而 CodeGen 生成 kernel stub 时要求 `__shcLaunchKernel` 必须在 TU 中已声明，否则直接报 `Can't find declaration for __shcLaunchKernel`。因此做一个编译器私有的 `-include` 头，把 attribute 宏和 launch API 声明补齐，让"裸 SHC 源码"无需 include 任何东西即可编译。
 
-`shc_launch_kernel` 的**第二个参数必须是 `dim3`**：CodeGen 直接读取该形参类型作为 grid/block 维度类型。
+`__shcLaunchKernel` 的**第二个参数必须是 `dim3`**：CodeGen 直接读取该形参类型作为 grid/block 维度类型。
 
 ---
 
@@ -127,7 +127,7 @@ SHC 没有厂商 runtime 头文件（CUDA 有 `cuda_runtime.h`，HIP 有 `hip_ru
 
 ```454:457:clang/lib/CodeGen/CGCUDANV.cpp
   if (CGF.getLangOpts().SHC)
-    LaunchKernelName = "shc_launch_kernel";
+    LaunchKernelName = "__shcLaunchKernel";
 ```
 
 - fatbin 布局沿用 HIP 方案，仅换段名/符号名：`.shc_fatbin`、`__shc_fatbin`、`__shc_fatbin_wrapper`、`__shc_gpubin_handle`、`__shc_module_ctor/dtor`、`__shc_register_globals`、`__shc_cuid_<hash>`；fatbin 尚不可用时留外部符号 `__shc_fatbin`，由链接期（lld 链接脚本）填充。
@@ -353,7 +353,7 @@ Driver.cpp 的分流（非 RDC 走 packager + linker-wrapper；RDC 落到 else �
    - `llvm/lib/Frontend/Offloading/OffloadWrapper.cpp` 的 `createFatbinDesc` / `createRegisterFatbinFunction` 目前是 `bool IsHIP` 二态（`.hip_fatbin`/`.nv_fatbin`、`.hip.fatbin_reg`/`.cuda.fatbin_reg`、注册函数名），需改三态；
    - `OffloadWrapper.h` 加 `wrapSHCBinary` 声明；
    - `ClangLinkerWrapper.cpp` 的 `wrapDeviceImages` 加 `case OFK_SHC`（参考 `wrapHIPBinary`）。
-2. **SHC runtime 缺失**：即使 wrap 完成，最终链接仍会卡在 `__shcRegisterFatBinary` / `__shcRegisterFunction` / `shc_launch_kernel` 等未定义符号，需要 runtime 库才能跑完整链接。
+2. **SHC runtime 缺失**：即使 wrap 完成，最终链接仍会卡在 `__shcRegisterFatBinary` / `__shcRegisterFunction` / `__shcLaunchKernel` 等未定义符号，需要 runtime 库才能跑完整链接。
 3. **`-emit-llvm -S` 在方案 C 下不可用**：`writeOffloadFile` 硬编码输出扩展名 `"o"`，IR 文本会被当目标文件喂给 `ld.lld`。HIP/CUDA 的 IR 测试都用 `-cc1` 绕过；要修需让扩展名随内容走（IR 文本没有 magic bytes，需按 `;` 开头等特征判断）。
 4. **方案 A 残留**：`SHCUtility.cpp` 的 `constructSHCFatbinCommand` 与 `SHC::Linker` 的 `TY_SHC_FATBIN` 分支在方案 C 下已不再被触发（fatbin 改由 linker-wrapper 生成），保留作为备用路径。
 5. **bundler 的 dummy host 条目**：`clang-offload-bundler` 要求至少一个 host 输入，SHC 用 `/dev/null`（Windows 下 `NUL`）占位，属已知妥协。

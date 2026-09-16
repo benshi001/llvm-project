@@ -983,7 +983,7 @@ void Clang::AddPreprocessingOptions(Compilation &C, const JobAction &JA,
   }
 
   // SHC force-includes the runtime wrapper, which defines the
-  // __host__/__device__/__global__ attributes and declares shc_launch_kernel.
+  // __host__/__device__/__global__ attributes and declares __shcLaunchKernel.
   // Unlike CUDA/HIP there is no vendor runtime header to pick up, and this
   // does not depend on an offload tool chain being present, so it is keyed
   // off the input type.

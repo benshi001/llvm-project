@@ -454,7 +454,7 @@ void CGNVCUDARuntime::emitDeviceStubBodyNew(CodeGenFunction &CGF,
   // SHC uses the flat C name declared by __clang_shc_runtime_wrapper.h rather
   // than the <prefix>LaunchKernel convention.
   if (CGF.getLangOpts().SHC)
-    LaunchKernelName = "shc_launch_kernel";
+    LaunchKernelName = "__shcLaunchKernel";
   const IdentifierInfo &cudaLaunchKernelII =
       CGM.getContext().Idents.get(LaunchKernelName);
   FunctionDecl *cudaLaunchKernelFD = nullptr;
