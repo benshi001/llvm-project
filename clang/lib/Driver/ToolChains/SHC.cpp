@@ -73,7 +73,8 @@ void SHCToolChain::addClangTargetOptions(
     CC1Args.append({"-fcuda-is-device", "-fno-threadsafe-statics"});
 
   // SHC device code is always relocatable: the device objects are linked into
-  // a single relocatable ELF before being embedded into the fat binary.
+  // a single image at the final link before being bundled into the fat binary.
+  // The driver rejects -fno-gpu-rdc for SHC inputs.
   CC1Args.push_back("-fgpu-rdc");
 
   DriverArgs.AddLastArg(CC1Args, options::OPT_gpu_max_threads_per_block_EQ);

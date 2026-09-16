@@ -5241,9 +5241,11 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       JA.isHostOffloading(Action::OFK_SYCL) ||
       (JA.isHostOffloading(C.getActiveOffloadKinds()));
 
-  // SYCL defaults to RDC; CUDA/HIP default to non-RDC.
+  // SYCL and SHC default to RDC; CUDA/HIP default to non-RDC. SHC is always
+  // relocatable, so it does not merely default to RDC, it requires it (the
+  // driver rejects -fno-gpu-rdc for SHC).
   bool IsRDCMode = Args.hasFlag(options::OPT_fgpu_rdc, options::OPT_fno_gpu_rdc,
-                                /*Default=*/IsSYCL);
+                                /*Default=*/IsSYCL || IsSHC);
 
   auto LTOMode = TC.getLTOMode(Args, JA.getOffloadingDeviceKind());
   bool IsUsingLTO = LTOMode != LTOK_None;

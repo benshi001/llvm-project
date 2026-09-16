@@ -1116,6 +1116,11 @@ void Driver::CreateOffloadingDeviceToolChains(Compilation &C,
       llvm::any_of(Inputs, [](std::pair<types::ID, const llvm::opt::Arg *> &I) {
         return types::isSHC(I.first);
       });
+  // SHC always compiles the device code relocatably: the device objects are
+  // only linked at the final link, so the non-RDC mode cannot be honored.
+  if (IsSHC && C.getInputArgs().hasArg(options::OPT_fno_gpu_rdc))
+    Diag(clang::diag::err_drv_argument_not_allowed_with)
+        << "-fno-gpu-rdc" << "SHC";
   bool IsSYCL = C.getInputArgs().hasFlag(options::OPT_fsycl,
                                          options::OPT_fno_sycl, false);
   bool IsOpenMPOffloading =
@@ -4221,7 +4226,14 @@ Driver::BuildOffloadingActions(Compilation &C, llvm::opt::DerivedArgList &Args,
             .isOSDarwin())
       HostAction->setCannotBeCollapsedWithNextDependentAction();
 
-    auto PL = types::getCompilationPhases(*this, Args, {Input}, InputType);
+    // The SHC device side is not affected by `-S`: it runs the full pipeline
+    // up to the object file so the offload image stays complete, while the
+    // host compilation stops at assembly.
+    bool SHCAsmOnly =
+        C.isOffloadingHostKind(Action::OFK_SHC) && Args.hasArg(options::OPT_S);
+    auto PL = types::getCompilationPhases(
+        InputType,
+        SHCAsmOnly ? phases::Assemble : getFinalPhase(Args, {Input}));
 
     for (phases::ID Phase : PL) {
       if (Phase == phases::Link) {
@@ -4325,6 +4337,13 @@ Driver::BuildOffloadingActions(Compilation &C, llvm::opt::DerivedArgList &Args,
   if (OffloadActions.empty())
     return HostAction;
 
+  // `-S` only asks for the host assembly. There is no device binary to package
+  // or embed and linking the device output is meaningless, so SHC builds no
+  // device output at all in that case.
+  if (C.isOffloadingHostKind(Action::OFK_SHC) &&
+      getFinalPhase(Args, {Input}) == phases::Compile)
+    return HostAction;
+
   OffloadAction::DeviceDependences DDep;
   if (!UsesLLVMOffloading && C.isOffloadingHostKind(Action::OFK_Cuda) &&
       (!Args.hasFlag(options::OPT_fgpu_rdc, options::OPT_fno_gpu_rdc, false) ||
@@ -4367,21 +4386,10 @@ Driver::BuildOffloadingActions(Compilation &C, llvm::opt::DerivedArgList &Args,
     PackagerAction = C.MakeAction<LinkerWrapperJobAction>(AL, FatbinType);
     DDep.add(*PackagerAction, *C.getOffloadToolChains(Kind).first->second,
              /*BA=*/{}, Kind);
-  } else if (!UsesLLVMOffloading && C.isOffloadingHostKind(Action::OFK_SHC) &&
-             !Args.hasFlag(options::OPT_fgpu_rdc, options::OPT_fno_gpu_rdc,
-                           false)) {
-    // SHC packages the device images and lets the linker wrapper bundle them
-    // into a fat binary, which the host compilation embeds. In RDC mode we
-    // fall through instead so the device code is linked at the final link.
-    Action *PackagerAction =
-        C.MakeAction<OffloadPackagerJobAction>(OffloadActions, types::TY_Image);
-    ActionList AL{PackagerAction};
-    PackagerAction =
-        C.MakeAction<LinkerWrapperJobAction>(AL, types::TY_SHC_FATBIN);
-    DDep.add(*PackagerAction,
-             *C.getOffloadToolChains(Action::OFK_SHC).first->second,
-             /*BA=*/{}, Action::OFK_SHC);
   } else {
+    // SHC is always relocatable, so it takes this path like SYCL and CUDA/HIP
+    // in RDC mode: the device images are packaged and carried to the final
+    // link, where the linker wrapper links them into the SHC fat binary.
     // Package all the offloading actions into a single output that can be
     // embedded in the host and linked.
     Action *PackagerAction =
