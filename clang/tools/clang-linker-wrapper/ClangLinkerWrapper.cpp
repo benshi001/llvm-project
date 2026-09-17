@@ -906,9 +906,11 @@ wrapDeviceImages(ArrayRef<std::unique_ptr<MemoryBuffer>> Buffers,
       return std::move(Err);
     break;
   case OFK_SHC:
-    // The registration code is emitted by the SHC host objects, the wrapper
-    // only supplies the linked device image they reference.
-    if (Error Err = offloading::wrapSHCBinary(M, BuffersToWrap.front()))
+    // SHC is always relocatable, so the host objects only leave offloading
+    // entries behind. Emit the fat binary and the constructor registering it
+    // with the runtime here, just like HIP does in RDC mode.
+    if (Error Err = offloading::wrapSHCBinary(
+            M, BuffersToWrap.front(), offloading::getOffloadEntryArray(M)))
       return std::move(Err);
     break;
   case OFK_SYCL: {

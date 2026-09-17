@@ -121,6 +121,38 @@
 ; CUDA-NEXT:   ret void
 ; CUDA-NEXT: }
 
+; RUN: llvm-offload-wrapper --triple=x86_64-unknown-linux-gnu -kind=shc %s -o %t.bc
+; RUN: llvm-dis %t.bc -o - | FileCheck %s --check-prefix=SHC
+
+;      SHC: @__start_llvm_offload_entries = external hidden constant [0 x %struct.__tgt_offload_entry]
+; SHC-NEXT: @__stop_llvm_offload_entries = external hidden constant [0 x %struct.__tgt_offload_entry]
+; SHC-NEXT: @__dummy.llvm_offload_entries = internal constant [0 x %struct.__tgt_offload_entry] zeroinitializer, section "llvm_offload_entries", align 8
+; SHC-NEXT: @llvm.used = appending global [1 x ptr] [ptr @__dummy.llvm_offload_entries], section "llvm.metadata"
+; SHC-NEXT: @.fatbin_image = internal constant {{.*}}, section ".shc_fatbin"
+; SHC-NEXT: @.fatbin_wrapper = internal constant %fatbin_wrapper { i32 1397244742, i32 1, ptr @.fatbin_image, ptr null }, section ".shcFatBinSegment", no_sanitize_address, no_sanitize_hwaddress, align 8
+; SHC-NEXT: @.shc.binary_handle = internal global ptr null
+; SHC-NEXT: @llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 101, ptr @.shc.fatbin_reg, ptr null }]
+
+;      SHC: define internal void @.shc.fatbin_reg() section ".text.startup" {
+; SHC-NEXT: entry:
+; SHC-NEXT:   %0 = call ptr @__shcRegisterFatBinary(ptr @.fatbin_wrapper)
+; SHC-NEXT:   store ptr %0, ptr @.shc.binary_handle, align 8
+; SHC-NEXT:   call void @.shc.globals_reg(ptr %0)
+; SHC-NEXT:   %1 = call i32 @atexit(ptr @.shc.fatbin_unreg)
+; SHC-NEXT:   ret void
+; SHC-NEXT: }
+
+;      SHC: define internal void @.shc.fatbin_unreg() section ".text.startup" {
+; SHC-NEXT: entry:
+; SHC-NEXT:   %0 = load ptr, ptr @.shc.binary_handle, align 8
+; SHC-NEXT:   call void @__shcUnregisterFatBinary(ptr %0)
+; SHC-NEXT:   ret void
+; SHC-NEXT: }
+
+; Only entries tagged with the SHC offloading kind (1 << 4) are registered.
+;      SHC: define internal void @.shc.globals_reg(ptr %0) section ".text.startup" {
+; SHC: icmp eq i16 %kind, 16
+
 ; RUN: llvm-offload-wrapper --triple=x86_64-unknown-linux-gnu -kind=sycl %s -o %t.bc
 ; RUN: llvm-dis %t.bc -o - | FileCheck %s --check-prefix=SYCL
 

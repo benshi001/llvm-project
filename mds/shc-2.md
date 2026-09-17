@@ -130,7 +130,7 @@ SHC 没有厂商 runtime 头文件（CUDA 有 `cuda_runtime.h`，HIP 有 `hip_ru
     LaunchKernelName = "__shcLaunchKernel";
 ```
 
-- fatbin 布局沿用 HIP 方案，仅换段名/符号名：`.shc_fatbin`、`__shc_fatbin`、`__shc_fatbin_wrapper`、`__shc_gpubin_handle`、`__shc_module_ctor/dtor`、`__shc_register_globals`、`__shc_cuid_<hash>`；fatbin 尚不可用时留外部符号 `__shc_fatbin`，由链接期（lld 链接脚本）填充。
+- fatbin 布局沿用 HIP 方案，仅换段名/符号名：`.shc_fatbin`、`__shc_fatbin`、`__shc_fatbin_wrapper`、`__shc_gpubin_handle`、`__shc_module_ctor/dtor`、`__shc_register_globals`、`__shc_cuid_<hash>`。RDC（SHC 恒 RDC）下 host 对象只留 offloading entries，`.shc_fatbin` 与注册 ctor（`.shc.fatbin_reg`）由 `clang-linker-wrapper` 在链接期生成，不再依赖外部符号 `__shc_fatbin`。
 - Sema 侧 launch 序列固定用 new launch：
 
 ```1236:1239:clang/lib/Sema/SemaCUDA.cpp
@@ -349,11 +349,12 @@ Driver.cpp 的分流（非 RDC 走 packager + linker-wrapper；RDC 落到 else �
 
 ## 已知限制与后续工作
 
-1. **RDC 的 host 嵌入未完成**：`wrapSHCBinary` 未实现，RDC 全链接会报 `shc wrapping is not supported`。需要：
-   - `llvm/lib/Frontend/Offloading/OffloadWrapper.cpp` 的 `createFatbinDesc` / `createRegisterFatbinFunction` 目前是 `bool IsHIP` 二态（`.hip_fatbin`/`.nv_fatbin`、`.hip.fatbin_reg`/`.cuda.fatbin_reg`、注册函数名），需改三态；
-   - `OffloadWrapper.h` 加 `wrapSHCBinary` 声明；
-   - `ClangLinkerWrapper.cpp` 的 `wrapDeviceImages` 加 `case OFK_SHC`（参考 `wrapHIPBinary`）。
-2. **SHC runtime 缺失**：即使 wrap 完成，最终链接仍会卡在 `__shcRegisterFatBinary` / `__shcRegisterFunction` / `__shcLaunchKernel` 等未定义符号，需要 runtime 库才能跑完整链接。
+1. ✅ **RDC 的链接期注册已完成**（方案 A：与 HIP RDC 同构，由 linker-wrapper 生成注册代码）：
+   - `llvm/lib/Frontend/Offloading/OffloadWrapper.cpp`：新增 `FatbinKind {CUDA, HIP, SHC}` 三态及 `getFatbinPrefix` / `getFatbinMagic` / `getFatbinSections` / `getFatbinOffloadKind` 辅助函数，`createFatbinDesc` / `createRegisterGlobalsFunction` / `createRegisterFatbinFunction` 的 `bool IsHIP` 改为 `FatbinKind`（段名 `.shc_fatbin` / `.shcFatBinSegment`，函数 `.shc.fatbin_reg` / `.shc.fatbin_unreg` / `.shc.globals_reg`，句柄 `.shc.binary_handle`，入口 `__shcRegisterFatBinary` / `__shcRegisterFunction` / `__shcRegisterVar` 等）；
+   - `OffloadWrapper.h` 的 `wrapSHCBinary` 改为与 `wrapHIPBinary` 相同的签名（`EntryArray` / `Suffix` / `EmitSurfacesAndTextures`），内部生成 fatbin 描述符 + 注册 ctor；
+   - `ClangLinkerWrapper.cpp` 的 `wrapDeviceImages` 的 `case OFK_SHC` 传入 `offloading::getOffloadEntryArray(M)`；
+   - `llvm-offload-wrapper` 支持 `-kind=shc`，使 `--save-temps` 的 verbose 路径可用。
+2. **SHC runtime 缺失**：注册代码已就位，但最终链接仍会卡在 `__shcRegisterFatBinary` / `__shcRegisterFunction` / `__shcLaunchKernel` 等未定义符号，需要 runtime 库才能跑完整链接。
 3. **`-emit-llvm -S` 在方案 C 下不可用**：`writeOffloadFile` 硬编码输出扩展名 `"o"`，IR 文本会被当目标文件喂给 `ld.lld`。HIP/CUDA 的 IR 测试都用 `-cc1` 绕过；要修需让扩展名随内容走（IR 文本没有 magic bytes，需按 `;` 开头等特征判断）。
 4. **方案 A 残留**：`SHCUtility.cpp` 的 `constructSHCFatbinCommand` 与 `SHC::Linker` 的 `TY_SHC_FATBIN` 分支在方案 C 下已不再被触发（fatbin 改由 linker-wrapper 生成），保留作为备用路径。
 5. **bundler 的 dummy host 条目**：`clang-offload-bundler` 要求至少一个 host 输入，SHC 用 `/dev/null`（Windows 下 `NUL`）占位，属已知妥协。

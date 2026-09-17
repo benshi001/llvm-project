@@ -35,7 +35,71 @@ using namespace llvm::offloading;
 namespace {
 /// Magic number that begins the section containing the CUDA fatbinary.
 constexpr unsigned CudaFatMagic = 0x466243b1;
-constexpr unsigned HIPFatMagic = 0x48495046;
+constexpr unsigned HIPFatMagic = 0x48495046; // "HIPF"
+constexpr unsigned SHCFatMagic = 0x53484346; // "SHCF"
+
+/// The runtime a fatbinary is registered with. CUDA, HIP and SHC share the
+/// same fatbinary layout and registration scheme, they only differ in the
+/// section names, the magic number and the names of the runtime entry points.
+enum class FatbinKind { CUDA, HIP, SHC };
+
+/// Returns the prefix used for the runtime entry points of \p Kind.
+StringRef getFatbinPrefix(FatbinKind Kind) {
+  switch (Kind) {
+  case FatbinKind::CUDA:
+    return "cuda";
+  case FatbinKind::HIP:
+    return "hip";
+  case FatbinKind::SHC:
+    return "shc";
+  }
+  llvm_unreachable("Unknown fatbinary kind");
+}
+
+/// Returns the magic number that begins the section created for \p Kind.
+unsigned getFatbinMagic(FatbinKind Kind) {
+  switch (Kind) {
+  case FatbinKind::CUDA:
+    return CudaFatMagic;
+  case FatbinKind::HIP:
+    return HIPFatMagic;
+  case FatbinKind::SHC:
+    return SHCFatMagic;
+  }
+  llvm_unreachable("Unknown fatbinary kind");
+}
+
+/// Returns the sections holding the fatbinary image and its wrapper for
+/// \p Kind as an (image, wrapper) pair.
+std::pair<StringRef, StringRef> getFatbinSections(FatbinKind Kind,
+                                                  const Triple &T) {
+  bool IsMacOS = T.isMacOSX();
+  switch (Kind) {
+  case FatbinKind::CUDA:
+    return {IsMacOS ? "__NV_CUDA,__nv_fatbin" : ".nv_fatbin",
+            IsMacOS ? "__NV_CUDA,__fatbin" : ".nvFatBinSegment"};
+  case FatbinKind::HIP:
+    return {IsMacOS ? "__HIP,__hip_fatbin" : ".hip_fatbin",
+            IsMacOS ? "__HIP,__fatbin" : ".hipFatBinSegment"};
+  case FatbinKind::SHC:
+    return {IsMacOS ? "__SHC,__shc_fatbin" : ".shc_fatbin",
+            IsMacOS ? "__SHC,__fatbin" : ".shcFatBinSegment"};
+  }
+  llvm_unreachable("Unknown fatbinary kind");
+}
+
+/// Returns the offloading kind the entries of \p Kind are tagged with.
+object::OffloadKind getFatbinOffloadKind(FatbinKind Kind) {
+  switch (Kind) {
+  case FatbinKind::CUDA:
+    return object::OFK_Cuda;
+  case FatbinKind::HIP:
+    return object::OFK_HIP;
+  case FatbinKind::SHC:
+    return object::OFK_SHC;
+  }
+  llvm_unreachable("Unknown fatbinary kind");
+}
 
 IntegerType *getSizeTTy(Module &M) {
   return M.getDataLayout().getIntPtrType(M.getContext());
@@ -273,16 +337,16 @@ StructType *getFatbinWrapperTy(Module &M) {
 
 /// Embed the image \p Image into the module \p M so it can be found by the
 /// runtime.
-GlobalVariable *createFatbinDesc(Module &M, ArrayRef<char> Image, bool IsHIP,
-                                 StringRef Suffix) {
+GlobalVariable *createFatbinDesc(Module &M, ArrayRef<char> Image,
+                                 FatbinKind Kind, StringRef Suffix) {
   LLVMContext &C = M.getContext();
   llvm::Type *Int8PtrTy = PointerType::getUnqual(C);
   const llvm::Triple &Triple = M.getTargetTriple();
 
+  auto [FatbinConstantSection, FatbinWrapperSection] =
+      getFatbinSections(Kind, Triple);
+
   // Create the global string containing the fatbinary.
-  StringRef FatbinConstantSection =
-      IsHIP ? (Triple.isMacOSX() ? "__HIP,__hip_fatbin" : ".hip_fatbin")
-            : (Triple.isMacOSX() ? "__NV_CUDA,__nv_fatbin" : ".nv_fatbin");
   auto *Data = ConstantDataArray::get(C, Image);
   auto *Fatbin = new GlobalVariable(M, Data->getType(), /*isConstant*/ true,
                                     GlobalVariable::InternalLinkage, Data,
@@ -290,11 +354,8 @@ GlobalVariable *createFatbinDesc(Module &M, ArrayRef<char> Image, bool IsHIP,
   Fatbin->setSection(FatbinConstantSection);
 
   // Create the fatbinary wrapper
-  StringRef FatbinWrapperSection =
-      IsHIP ? (Triple.isMacOSX() ? "__HIP,__fatbin" : ".hipFatBinSegment")
-            : (Triple.isMacOSX() ? "__NV_CUDA,__fatbin" : ".nvFatBinSegment");
   Constant *FatbinWrapper[] = {
-      ConstantInt::get(Type::getInt32Ty(C), IsHIP ? HIPFatMagic : CudaFatMagic),
+      ConstantInt::get(Type::getInt32Ty(C), getFatbinMagic(Kind)),
       ConstantInt::get(Type::getInt32Ty(C), 1),
       ConstantExpr::getPointerBitCastOrAddrSpaceCast(Fatbin, Int8PtrTy),
       ConstantPointerNull::get(PointerType::getUnqual(C))};
@@ -339,12 +400,20 @@ GlobalVariable *createFatbinDesc(Module &M, ArrayRef<char> Image, bool IsHIP,
 ///                         0, entry->size, 0, 0);
 ///   }
 /// }
-Function *createRegisterGlobalsFunction(Module &M, bool IsHIP,
+///
+/// The CUDA spellings above are used for CUDA only; HIP and SHC emit the same
+/// code with their own prefix (`__hip*`, `__shc*`) and offloading kind.
+Function *createRegisterGlobalsFunction(Module &M, FatbinKind Kind,
                                         EntryArrayTy EntryArray,
                                         StringRef Suffix,
                                         bool EmitSurfacesAndTextures) {
   LLVMContext &C = M.getContext();
   auto [EntriesB, EntriesE] = EntryArray;
+
+  // Builds the name of a runtime entry point, e.g. `__shcRegisterFunction`.
+  auto RuntimeName = [&](StringRef Name) {
+    return (Twine("__") + getFatbinPrefix(Kind) + Name).str();
+  };
 
   // Get the __cudaRegisterFunction function declaration.
   PointerType *Int8PtrTy = PointerType::get(C, 0);
@@ -355,8 +424,8 @@ Function *createRegisterGlobalsFunction(Module &M, bool IsHIP,
       {Int8PtrPtrTy, Int8PtrTy, Int8PtrTy, Int8PtrTy, Type::getInt32Ty(C),
        Int8PtrTy, Int8PtrTy, Int8PtrTy, Int8PtrTy, Int32PtrTy},
       /*isVarArg*/ false);
-  FunctionCallee RegFunc = M.getOrInsertFunction(
-      IsHIP ? "__hipRegisterFunction" : "__cudaRegisterFunction", RegFuncTy);
+  FunctionCallee RegFunc =
+      M.getOrInsertFunction(RuntimeName("RegisterFunction"), RegFuncTy);
 
   // Get the __cudaRegisterVar function declaration.
   auto *RegVarTy = FunctionType::get(
@@ -364,8 +433,8 @@ Function *createRegisterGlobalsFunction(Module &M, bool IsHIP,
       {Int8PtrPtrTy, Int8PtrTy, Int8PtrTy, Int8PtrTy, Type::getInt32Ty(C),
        getSizeTTy(M), Type::getInt32Ty(C), Type::getInt32Ty(C)},
       /*isVarArg*/ false);
-  FunctionCallee RegVar = M.getOrInsertFunction(
-      IsHIP ? "__hipRegisterVar" : "__cudaRegisterVar", RegVarTy);
+  FunctionCallee RegVar =
+      M.getOrInsertFunction(RuntimeName("RegisterVar"), RegVarTy);
 
   // Get the __cudaRegisterSurface function declaration.
   FunctionType *RegManagedVarTy =
@@ -373,9 +442,8 @@ Function *createRegisterGlobalsFunction(Module &M, bool IsHIP,
                         {Int8PtrPtrTy, Int8PtrTy, Int8PtrTy, Int8PtrTy,
                          getSizeTTy(M), Type::getInt32Ty(C)},
                         /*isVarArg=*/false);
-  FunctionCallee RegManagedVar = M.getOrInsertFunction(
-      IsHIP ? "__hipRegisterManagedVar" : "__cudaRegisterManagedVar",
-      RegManagedVarTy);
+  FunctionCallee RegManagedVar =
+      M.getOrInsertFunction(RuntimeName("RegisterManagedVar"), RegManagedVarTy);
 
   // Get the __cudaRegisterSurface function declaration.
   FunctionType *RegSurfaceTy =
@@ -383,8 +451,8 @@ Function *createRegisterGlobalsFunction(Module &M, bool IsHIP,
                         {Int8PtrPtrTy, Int8PtrTy, Int8PtrTy, Int8PtrTy,
                          Type::getInt32Ty(C), Type::getInt32Ty(C)},
                         /*isVarArg=*/false);
-  FunctionCallee RegSurface = M.getOrInsertFunction(
-      IsHIP ? "__hipRegisterSurface" : "__cudaRegisterSurface", RegSurfaceTy);
+  FunctionCallee RegSurface =
+      M.getOrInsertFunction(RuntimeName("RegisterSurface"), RegSurfaceTy);
 
   // Get the __cudaRegisterTexture function declaration.
   FunctionType *RegTextureTy = FunctionType::get(
@@ -392,14 +460,14 @@ Function *createRegisterGlobalsFunction(Module &M, bool IsHIP,
       {Int8PtrPtrTy, Int8PtrTy, Int8PtrTy, Int8PtrTy, Type::getInt32Ty(C),
        Type::getInt32Ty(C), Type::getInt32Ty(C)},
       /*isVarArg=*/false);
-  FunctionCallee RegTexture = M.getOrInsertFunction(
-      IsHIP ? "__hipRegisterTexture" : "__cudaRegisterTexture", RegTextureTy);
+  FunctionCallee RegTexture =
+      M.getOrInsertFunction(RuntimeName("RegisterTexture"), RegTextureTy);
 
   auto *RegGlobalsTy = FunctionType::get(Type::getVoidTy(C), Int8PtrPtrTy,
                                          /*isVarArg*/ false);
-  auto *RegGlobalsFn =
-      Function::Create(RegGlobalsTy, GlobalValue::InternalLinkage,
-                       IsHIP ? ".hip.globals_reg" : ".cuda.globals_reg", &M);
+  auto *RegGlobalsFn = Function::Create(
+      RegGlobalsTy, GlobalValue::InternalLinkage,
+      (Twine(".") + getFatbinPrefix(Kind) + ".globals_reg").str(), &M);
   RegGlobalsFn->setSection(getStartupSection(M.getTargetTriple()));
 
   // Create the loop to register all the entries.
@@ -433,7 +501,7 @@ Function *createRegisterGlobalsFunction(Module &M, bool IsHIP,
       Builder.CreateInBoundsGEP(offloading::getEntryTy(M), Entry,
                                 {ConstantInt::get(Type::getInt32Ty(C), 0),
                                  ConstantInt::get(Type::getInt32Ty(C), 2)});
-  auto *Kind = Builder.CreateLoad(Type::getInt16Ty(C), KindPtr, "kind");
+  auto *EntryKind = Builder.CreateLoad(Type::getInt16Ty(C), KindPtr, "kind");
   auto *NamePtr =
       Builder.CreateInBoundsGEP(offloading::getEntryTy(M), Entry,
                                 {ConstantInt::get(Type::getInt32Ty(C), 0),
@@ -476,9 +544,8 @@ Function *createRegisterGlobalsFunction(Module &M, bool IsHIP,
   auto *Normalized = Builder.CreateLShr(
       NormalizedBit, ConstantInt::get(Type::getInt32Ty(C), 5), "normalized");
   auto *KindCond = Builder.CreateICmpEQ(
-      Kind, ConstantInt::get(Type::getInt16Ty(C),
-                             IsHIP ? object::OffloadKind::OFK_HIP
-                                   : object::OffloadKind::OFK_Cuda));
+      EntryKind,
+      ConstantInt::get(Type::getInt16Ty(C), getFatbinOffloadKind(Kind)));
   Builder.CreateCondBr(KindCond, IfKindBB, IfEndBB);
   Builder.SetInsertPoint(IfKindBB);
   auto *FnCond = Builder.CreateICmpEQ(
@@ -548,28 +615,33 @@ Function *createRegisterGlobalsFunction(Module &M, bool IsHIP,
 // Create the constructor and destructor to register the fatbinary with the CUDA
 // runtime.
 void createRegisterFatbinFunction(Module &M, GlobalVariable *FatbinDesc,
-                                  bool IsHIP, EntryArrayTy EntryArray,
+                                  FatbinKind Kind, EntryArrayTy EntryArray,
                                   StringRef Suffix,
                                   bool EmitSurfacesAndTextures) {
   LLVMContext &C = M.getContext();
+  StringRef Prefix = getFatbinPrefix(Kind);
+  // Builds the name of a runtime entry point, e.g. `__shcRegisterFatBinary`.
+  auto RuntimeName = [&](StringRef Name) {
+    return (Twine("__") + Prefix + Name).str();
+  };
   auto *CtorFuncTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg*/ false);
   auto *CtorFunc = Function::Create(
       CtorFuncTy, GlobalValue::InternalLinkage,
-      (IsHIP ? ".hip.fatbin_reg" : ".cuda.fatbin_reg") + Suffix, &M);
+      (Twine(".") + Prefix + ".fatbin_reg" + Suffix).str(), &M);
   CtorFunc->setSection(getStartupSection(M.getTargetTriple()));
 
   auto *DtorFuncTy = FunctionType::get(Type::getVoidTy(C), /*isVarArg*/ false);
   auto *DtorFunc = Function::Create(
       DtorFuncTy, GlobalValue::InternalLinkage,
-      (IsHIP ? ".hip.fatbin_unreg" : ".cuda.fatbin_unreg") + Suffix, &M);
+      (Twine(".") + Prefix + ".fatbin_unreg" + Suffix).str(), &M);
   DtorFunc->setSection(getStartupSection(M.getTargetTriple()));
 
   auto *PtrTy = PointerType::getUnqual(C);
 
   // Get the __cudaRegisterFatBinary function declaration.
   auto *RegFatTy = FunctionType::get(PtrTy, PtrTy, /*isVarArg=*/false);
-  FunctionCallee RegFatbin = M.getOrInsertFunction(
-      IsHIP ? "__hipRegisterFatBinary" : "__cudaRegisterFatBinary", RegFatTy);
+  FunctionCallee RegFatbin =
+      M.getOrInsertFunction(RuntimeName("RegisterFatBinary"), RegFatTy);
   // Get the __cudaRegisterFatBinaryEnd function declaration.
   auto *RegFatEndTy =
       FunctionType::get(Type::getVoidTy(C), PtrTy, /*isVarArg=*/false);
@@ -578,9 +650,8 @@ void createRegisterFatbinFunction(Module &M, GlobalVariable *FatbinDesc,
   // Get the __cudaUnregisterFatBinary function declaration.
   auto *UnregFatTy =
       FunctionType::get(Type::getVoidTy(C), PtrTy, /*isVarArg=*/false);
-  FunctionCallee UnregFatbin = M.getOrInsertFunction(
-      IsHIP ? "__hipUnregisterFatBinary" : "__cudaUnregisterFatBinary",
-      UnregFatTy);
+  FunctionCallee UnregFatbin =
+      M.getOrInsertFunction(RuntimeName("UnregisterFatBinary"), UnregFatTy);
 
   auto *AtExitTy =
       FunctionType::get(Type::getInt32Ty(C), PtrTy, /*isVarArg=*/false);
@@ -589,7 +660,7 @@ void createRegisterFatbinFunction(Module &M, GlobalVariable *FatbinDesc,
   auto *BinaryHandleGlobal = new llvm::GlobalVariable(
       M, PtrTy, false, llvm::GlobalValue::InternalLinkage,
       llvm::ConstantPointerNull::get(PtrTy),
-      (IsHIP ? ".hip.binary_handle" : ".cuda.binary_handle") + Suffix);
+      (Twine(".") + Prefix + ".binary_handle" + Suffix).str());
 
   // Create the constructor to register this image with the runtime.
   IRBuilder<> CtorBuilder(BasicBlock::Create(C, "entry", CtorFunc));
@@ -599,11 +670,12 @@ void createRegisterFatbinFunction(Module &M, GlobalVariable *FatbinDesc,
   CtorBuilder.CreateAlignedStore(
       Handle, BinaryHandleGlobal,
       Align(M.getDataLayout().getPointerTypeSize(PtrTy)));
-  CtorBuilder.CreateCall(createRegisterGlobalsFunction(M, IsHIP, EntryArray,
+  CtorBuilder.CreateCall(createRegisterGlobalsFunction(M, Kind, EntryArray,
                                                        Suffix,
                                                        EmitSurfacesAndTextures),
                          Handle);
-  if (!IsHIP)
+  // Only the CUDA runtime needs to be told that all fat binaries are loaded.
+  if (Kind == FatbinKind::CUDA)
     CtorBuilder.CreateCall(RegFatbinEnd, Handle);
   CtorBuilder.CreateCall(AtExit, DtorFunc);
   CtorBuilder.CreateRetVoid();
@@ -728,12 +800,12 @@ Error offloading::wrapCudaBinary(Module &M, ArrayRef<char> Image,
                                  EntryArrayTy EntryArray,
                                  llvm::StringRef Suffix,
                                  bool EmitSurfacesAndTextures) {
-  GlobalVariable *Desc = createFatbinDesc(M, Image, /*IsHip=*/false, Suffix);
+  GlobalVariable *Desc = createFatbinDesc(M, Image, FatbinKind::CUDA, Suffix);
   if (!Desc)
     return createStringError(inconvertibleErrorCode(),
                              "No fatbin section created.");
 
-  createRegisterFatbinFunction(M, Desc, /*IsHip=*/false, EntryArray, Suffix,
+  createRegisterFatbinFunction(M, Desc, FatbinKind::CUDA, EntryArray, Suffix,
                                EmitSurfacesAndTextures);
   return Error::success();
 }
@@ -741,29 +813,31 @@ Error offloading::wrapCudaBinary(Module &M, ArrayRef<char> Image,
 Error offloading::wrapHIPBinary(Module &M, ArrayRef<char> Image,
                                 EntryArrayTy EntryArray, llvm::StringRef Suffix,
                                 bool EmitSurfacesAndTextures) {
-  GlobalVariable *Desc = createFatbinDesc(M, Image, /*IsHip=*/true, Suffix);
+  GlobalVariable *Desc = createFatbinDesc(M, Image, FatbinKind::HIP, Suffix);
   if (!Desc)
     return createStringError(inconvertibleErrorCode(),
                              "No fatbin section created.");
 
-  createRegisterFatbinFunction(M, Desc, /*IsHip=*/true, EntryArray, Suffix,
+  createRegisterFatbinFunction(M, Desc, FatbinKind::HIP, EntryArray, Suffix,
                                EmitSurfacesAndTextures);
   return Error::success();
 }
 
-Error offloading::wrapSHCBinary(Module &M, ArrayRef<char> Image) {
-  // The SHC host objects keep the module constructor that registers the fat
-  // binary with the runtime, they only reference the image through the
-  // `__shc_fatbin` symbol. Provide that definition here so the link resolves.
-  Constant *ImageData = ConstantDataArray::get(M.getContext(), Image);
-  auto *Fatbin = new GlobalVariable(M, ImageData->getType(),
-                                    /*isConstant=*/true,
-                                    GlobalValue::ExternalLinkage, ImageData,
-                                    "__shc_fatbin");
-  const Triple T(M.getTargetTriple());
-  Fatbin->setSection(T.isOSBinFormatMachO() ? "__SHC,__shc_fatbin"
-                                            : ".shc_fatbin");
-  Fatbin->setAlignment(Align(4096));
+Error offloading::wrapSHCBinary(Module &M, ArrayRef<char> Image,
+                                EntryArrayTy EntryArray,
+                                llvm::StringRef Suffix,
+                                bool EmitSurfacesAndTextures) {
+  // SHC is always relocatable, so there is a single fat binary for the whole
+  // program and the host objects leave nothing but offloading entries behind.
+  // Emitting the image and the constructor registering it with the runtime is
+  // therefore entirely up to the link step, exactly like HIP in RDC mode.
+  GlobalVariable *Desc = createFatbinDesc(M, Image, FatbinKind::SHC, Suffix);
+  if (!Desc)
+    return createStringError(inconvertibleErrorCode(),
+                             "No fatbin section created.");
+
+  createRegisterFatbinFunction(M, Desc, FatbinKind::SHC, EntryArray, Suffix,
+                               EmitSurfacesAndTextures);
   return Error::success();
 }
 

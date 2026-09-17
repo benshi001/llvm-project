@@ -41,6 +41,7 @@ static cl::opt<object::OffloadKind> Kind(
     cl::values(clEnumValN(object::OFK_OpenMP, "openmp", "Wrap OpenMP binaries"),
                clEnumValN(object::OFK_Cuda, "cuda", "Wrap CUDA binaries"),
                clEnumValN(object::OFK_HIP, "hip", "Wrap HIP binaries"),
+               clEnumValN(object::OFK_SHC, "shc", "Wrap SHC binaries"),
                clEnumValN(object::OFK_SYCL, "sycl", "Wrap SYCL binaries")));
 
 static cl::opt<bool> Relocatable(
@@ -64,9 +65,10 @@ static cl::opt<std::string>
 
 static Error wrapImages(ArrayRef<ArrayRef<char>> BuffersToWrap) {
   if (BuffersToWrap.size() > 1 &&
-      (Kind == llvm::object::OFK_Cuda || Kind == llvm::object::OFK_HIP))
+      (Kind == llvm::object::OFK_Cuda || Kind == llvm::object::OFK_HIP ||
+       Kind == llvm::object::OFK_SHC))
     return createStringError(
-        "CUDA / HIP offloading uses a single fatbinary or offload bundle");
+        "CUDA / HIP / SHC offloading uses a single fatbinary or offload bundle");
 
   LLVMContext Context;
   Module M("offload.wrapper.module", Context);
@@ -87,6 +89,11 @@ static Error wrapImages(ArrayRef<ArrayRef<char>> BuffersToWrap) {
     break;
   case llvm::object::OFK_HIP:
     if (Error Err = offloading::wrapHIPBinary(
+            M, BuffersToWrap.front(), offloading::getOffloadEntryArray(M)))
+      return Err;
+    break;
+  case llvm::object::OFK_SHC:
+    if (Error Err = offloading::wrapSHCBinary(
             M, BuffersToWrap.front(), offloading::getOffloadEntryArray(M)))
       return Err;
     break;

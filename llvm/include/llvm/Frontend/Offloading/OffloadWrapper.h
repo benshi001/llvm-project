@@ -55,11 +55,20 @@ LLVM_ABI llvm::Error wrapHIPBinary(llvm::Module &M, llvm::ArrayRef<char> Images,
                                    llvm::StringRef Suffix = "",
                                    bool EmitSurfacesAndTextures = true);
 
-/// Wraps the input bundled image into the module \p M as the `__shc_fatbin`
-/// global symbol. The SHC host objects already register the fat binary with
-/// the runtime from their module constructor, so only the image itself has to
-/// be defined at link time.
-LLVM_ABI llvm::Error wrapSHCBinary(llvm::Module &M, llvm::ArrayRef<char> Image);
+/// Wraps the input bundled image into the module \p M as global symbols and
+/// registers the image with the SHC runtime. SHC is always relocatable, so the
+/// host objects only leave offloading entries behind and the registration
+/// constructor has to be emitted here, at the link where the single SHC fat
+/// binary is created.
+/// \param EntryArray Optional pair pointing to the begin and end of the
+/// `__tgt_offload_entry` array.
+/// \param Suffix An optional suffix appended to the emitted symbols.
+/// \param EmitSurfacesAndTextures Whether to emit surface and textures
+/// registration code. It defaults to false.
+LLVM_ABI llvm::Error wrapSHCBinary(llvm::Module &M, llvm::ArrayRef<char> Image,
+                                   EntryArrayTy EntryArray,
+                                   llvm::StringRef Suffix = "",
+                                   bool EmitSurfacesAndTextures = true);
 
 struct SYCLJITOptions {
   // Target/compiler specific options that are passed to the device compiler at
